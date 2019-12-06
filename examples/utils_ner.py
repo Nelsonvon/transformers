@@ -118,12 +118,14 @@ def convert_examples_to_features(examples,
             tokens.extend(word_tokens)
             # Use the real label id for the first token of the word, and padding ids for the remaining tokens
             label_ids.extend([label_map[label]] + [pad_token_label_id] * (len(word_tokens) - 1))
+        # print("length label_ids: {}".format(str(len(label_ids)))) # TODELETE
 
         # Account for [CLS] and [SEP] with "- 2" and with "- 3" for RoBERTa.
         special_tokens_count = 3 if sep_token_extra else 2
         if len(tokens) > max_seq_length - special_tokens_count:
             tokens = tokens[:(max_seq_length - special_tokens_count)]
             label_ids = label_ids[:(max_seq_length - special_tokens_count)]
+            # print("length label_ids: {}".format(str(len(label_ids))))  # TODELETE
 
         # The convention in BERT is:
         # (a) For sequence pairs:
@@ -168,20 +170,31 @@ def convert_examples_to_features(examples,
 
         # Zero-pad up to the sequence length.
         padding_length = max_seq_length - len(input_ids)
+        # print("padding_length = " + str(padding_length))
+        # print("input_ids_length = "+ str(len(input_ids)))
+        # print("length label_ids: {}".format(str(len(label_ids))))
         if pad_on_left:
             input_ids = ([pad_token] * padding_length) + input_ids
             input_mask = ([0 if mask_padding_with_zero else 1] * padding_length) + input_mask
             segment_ids = ([pad_token_segment_id] * padding_length) + segment_ids
             label_ids = ([pad_token_label_id] * padding_length) + label_ids
+            # print("pad_on_left")
         else:
             input_ids += ([pad_token] * padding_length)
             input_mask += ([0 if mask_padding_with_zero else 1] * padding_length)
             segment_ids += ([pad_token_segment_id] * padding_length)
             label_ids += ([pad_token_label_id] * padding_length)
+            # print("pad_not_on_left")
+        # print("length label_ids: {}".format(str(len(label_ids))))  # TODELETE
 
         assert len(input_ids) == max_seq_length
         assert len(input_mask) == max_seq_length
         assert len(segment_ids) == max_seq_length
+        if len(label_ids) != max_seq_length:
+            print(len(label_ids))
+            print(label_ids)
+            print(example.words)
+            print(example.labels)
         assert len(label_ids) == max_seq_length
 
         if ex_index < 5:

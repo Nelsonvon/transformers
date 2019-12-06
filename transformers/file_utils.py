@@ -253,7 +253,8 @@ def http_get(url, temp_file, proxies=None, resume_size=0):
     progress.close()
 
 
-def get_from_cache(url, cache_dir=None, force_download=False, proxies=None, etag_timeout=10, resume_download=False):
+def \
+        get_from_cache(url, cache_dir=None, force_download=False, proxies=None, etag_timeout=10, resume_download=False):
     """
     Given a URL, look for the corresponding dataset in the local cache.
     If it's not there, download it. Then return the path to the cached file.
