@@ -67,7 +67,8 @@ if is_torch_available():
     from .modeling_utils import (PreTrainedModel, prune_layer, Conv1D)
     from .modeling_auto import (AutoModel, AutoModelForSequenceClassification, AutoModelForQuestionAnswering,
                                 AutoModelWithLMHead)
-
+    from .modeling_yago_ref_bert import (YagoRefBertConfig, YagoRefBertEmbeddings, YagoRefBertForPreTraining,
+                                        YagoRefBertForTokenClassification, YagoRefBertModel)
     from .modeling_bert import (BertPreTrainedModel, BertModel, BertForPreTraining,
                                 BertForMaskedLM, BertForNextSentencePrediction,
                                 BertForSequenceClassification, BertForMultipleChoice,

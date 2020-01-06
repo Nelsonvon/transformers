@@ -27,7 +27,7 @@ from torch import nn
 from torch.nn import CrossEntropyLoss, MSELoss
 
 from .modeling_utils import PreTrainedModel, prune_linear_layer
-from .configuration_bert import BertConfig
+from .configuration_bert import BertConfig, YagoRefBertConfig
 from .file_utils import add_start_docstrings
 
 logger = logging.getLogger(__name__)
@@ -185,6 +185,7 @@ class BertEmbeddings(nn.Module):
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
         return embeddings
+
 
 
 class BertSelfAttention(nn.Module):
@@ -736,6 +737,7 @@ class BertModel(BertPreTrainedModel):
         return outputs  # sequence_output, pooled_output, (hidden_states), (attentions)
 
 
+
 @add_start_docstrings("""Bert Model with two heads on top as done during the pre-training:
                        a `masked language modeling` head and a `next sentence prediction (classification)` head. """,
                       BERT_START_DOCSTRING,
@@ -811,6 +813,7 @@ class BertForPreTraining(BertPreTrainedModel):
             outputs = (total_loss,) + outputs
 
         return outputs  # (loss), prediction_scores, seq_relationship_score, (hidden_states), (attentions)
+
 
 
 @add_start_docstrings("""Bert Model with a `language modeling` head on top. """,

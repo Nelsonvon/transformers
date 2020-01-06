@@ -113,3 +113,43 @@ class BertConfig(PretrainedConfig):
         else:
             raise ValueError("First argument must be either a vocabulary size (int)"
                              " or the path to a pretrained model config file (str)")
+
+class YagoRefBertConfig(BertConfig):
+    r"""
+    A variant of Bert which introduce the Yago ontology info to the input.
+    
+    Arguments:
+        reference_size: Size of the Yago types.
+
+    """
+    def __init__(self,
+                 vocab_size_or_config_json_file=30522,
+                 hidden_size=768,
+                 num_hidden_layers=12,
+                 num_attention_heads=12,
+                 intermediate_size=3072,
+                 hidden_act="gelu",
+                 hidden_dropout_prob=0.1,
+                 attention_probs_dropout_prob=0.1,
+                 max_position_embeddings=512,
+                 type_vocab_size=2,
+                 initializer_range=0.02,
+                 layer_norm_eps=1e-12,
+                 reference_size=None,
+                 **kwargs):
+        super(YagoRefBertConfig, self).__init__(vocab_size_or_config_json_file,
+                                                hidden_size,
+                                                num_hidden_layers,
+                                                num_attention_heads,
+                                                intermediate_size,
+                                                hidden_act,
+                                                hidden_dropout_prob,
+                                                attention_probs_dropout_prob,
+                                                max_position_embeddings,
+                                                type_vocab_size,
+                                                initializer_range,
+                                                layer_norm_eps,
+                                                **kwargs)
+        self.reference_size = reference_size
+
+
