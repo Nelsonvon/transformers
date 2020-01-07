@@ -22,6 +22,7 @@ import glob
 import logging
 import os
 import random
+import pickle
 
 import numpy as np
 import torch
@@ -31,7 +32,7 @@ from torch.nn import CrossEntropyLoss
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
-from utils_bert import convert_examples_to_features, read_examples_from_pickle
+from qihui.model.utils_bert import convert_examples_to_features, read_examples_from_pickle
 # from utils_ner import convert_examples_to_features, get_labels, read_examples_from_file
 
 from transformers import AdamW, get_linear_schedule_with_warmup
@@ -42,6 +43,7 @@ from transformers import YagoRefBertModel, YagoRefBertConfig, YagoRefBertForToke
 # from transformers import CamembertConfig, CamembertForTokenClassification, CamembertTokenizer
 
 logger = logging.getLogger(__name__)
+REFERENCE_SIZE=959
 
 # ALL_MODELS = sum(
 #     (tuple(conf.pretrained_config_archive_map.keys()) for conf in (BertConfig, RobertaConfig, DistilBertConfig)),
@@ -125,10 +127,18 @@ def train(args, train_dataset, model, tokenizer, pad_token_label_id):
         for step, batch in enumerate(epoch_iterator):
             model.train()
             batch = tuple(t.to(args.device) for t in batch)
-            inputs = {"input_ids": batch[0],
-                      "attention_mask": batch[1],
-                      "masked_lm_labels": batch[3],
-                      "next_sentence_label": batch[4]}
+            if args.yago_reference:
+                inputs = {"input_ids": batch[0],
+                          "attention_mask": batch[1],
+                          "masked_lm_labels": batch[3],
+                          "next_sentence_label": batch[4],
+                          "reference_ids":batch[5],
+                          "reference_weights":batch[6]}
+            else:
+                inputs = {"input_ids": batch[0],
+                          "attention_mask": batch[1],
+                          "masked_lm_labels": batch[3],
+                          "next_sentence_label": batch[4]}
             # if args.model_type != "distilbert":
             #     inputs["token_type_ids"] = batch[2] if args.model_type in ["bert", "xlnet"] else None  # XLM and RoBERTa don"t use segment_ids
 
@@ -281,21 +291,31 @@ def load_and_cache_examples(args, tokenizer, pad_token_label_id, mode):
     if args.local_rank not in [-1, 0] and not evaluate:
         torch.distributed.barrier()  # Make sure only the first process in distributed training process the dataset, and the others will use the cache
 
+
     # Load data features from cache or dataset file
     cached_features_file = os.path.join(args.data_dir, "cached_{}_{}_{}".format(mode,
         list(filter(None, args.model_name_or_path.split("/"))).pop(),
         str(args.max_seq_length)))
-    if os.path.exists(cached_features_file) and not args.overwrite_cache:
+    cached_yago_file = os.path.join(args.data_dir, "cached_{}_{}_{}_yago".format(mode,
+                                                                            list(filter(None, args.model_name_or_path.split("/"))).pop(),
+                                                                            str(args.max_seq_length)))
+    if (os.path.exists(cached_features_file) and not args.overwrite_cache and not args.yago_reference) or \
+        (os.path.exists(cached_features_file) and not args.overwrite_cache and args.yago_reference and os.path.exists(cached_yago_file)):
         logger.info("Loading features from cached file %s", cached_features_file)
         features = torch.load(cached_features_file)
+        if args.yago_reference:
+            logger.info("Loading additional yago features from cached file %s", cached_yago_file)
+            ref_features = torch.load(cached_yago_file)
     else:
         logger.info("Creating features from dataset file at %s", args.data_dir)
         examples = read_examples_from_pickle(args.data_dir)
-        features = convert_examples_to_features(examples, tokenizer, args.max_seq_length)
+        features, ref_features = convert_examples_to_features(examples, tokenizer, args.max_seq_length, yago_ref=args.yago_reference)
 
         if args.local_rank in [-1, 0]:
             logger.info("Saving features into cached file %s", cached_features_file)
             torch.save(features, cached_features_file)
+            if args.yago_reference:
+                torch.save(ref_features, cached_yago_file)
 
     if args.local_rank == 0 and not evaluate:
         torch.distributed.barrier()  # Make sure only the first process in distributed training process the dataset, and the others will use the cache
@@ -306,8 +326,19 @@ def load_and_cache_examples(args, tokenizer, pad_token_label_id, mode):
     all_segment_ids = torch.tensor([f.segment_ids for f in features], dtype=torch.long)
     all_output_ids = torch.tensor([f.output_ids for f in features], dtype=torch.long)
     all_next_sentence_label = torch.tensor([f.is_next for f in features], dtype=torch.long)
+    if args.yago_reference:
 
-    dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_output_ids, all_next_sentence_label)
+        # assert(len(ref_features[0].reference_ids)==len(ref_features[0].reference_weights))
+        # assert (len(ref_features[0].reference_ids[0]) == len(ref_features[0].reference_weights[0]))
+        all_reference_ids = torch.tensor([r.reference_ids for r in ref_features], dtype=torch.long)
+        # print(all_reference_ids.size())
+        all_reference_weights = torch.tensor([r.reference_weights for r in ref_features], dtype=torch.float)
+        # print(all_reference_weights.size())
+        dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_output_ids, all_next_sentence_label,
+                                all_reference_ids, all_reference_weights)
+    else:
+        dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_output_ids, all_next_sentence_label)
+
     return dataset
 
 
@@ -383,6 +414,8 @@ def main():
                         help="For distributed training: local_rank")
     parser.add_argument("--server_ip", type=str, default="", help="For distant debugging.")
     parser.add_argument("--server_port", type=str, default="", help="For distant debugging.")
+    parser.add_argument("--yago_reference", action="store_true",
+                        help="Use Reference of Yago types as additional inputs.")
     args = parser.parse_args()
 
     if os.path.exists(args.output_dir) and os.listdir(
@@ -429,8 +462,8 @@ def main():
 
     # args.model_type = args.model_type.lower()
     config_class, model_class, tokenizer_class = (BertConfig, BertForPreTraining, BertTokenizer)
-    # config = BertConfig() # TODO:
-    config = BertConfig.from_pretrained('bert-base-uncased',
+    # config = BertConfig() #
+    bertconfig = BertConfig.from_pretrained('bert-base-uncased',
                                     do_lower_case=True,
                                     cache_dir='/work/smt2/qfeng/Project/huggingface/pretrain/base_uncased')
     # tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,
@@ -443,7 +476,12 @@ def main():
     #                                     from_tf=bool(".ckpt" in args.model_name_or_path),
     #                                     config=config,
     #                                     cache_dir=args.cache_dir if args.cache_dir else None)
-    model = BertForPreTraining(config)
+    if not args.yago_reference:
+        config = bertconfig
+        model = BertForPreTraining(config)
+    else:
+        config = YagoRefBertConfig(bertconfig.__dict__,reference_size=REFERENCE_SIZE)
+        model = YagoRefBertForPreTraining(config)
 
     if args.local_rank == 0:
         torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
@@ -524,7 +562,7 @@ def main():
     #                 else:
     #                     logger.warning("Maximum sequence length exceeded: No prediction for '%s'.", line.split()[0])
 
-    return results
+    # return results
 
 
 if __name__ == "__main__":

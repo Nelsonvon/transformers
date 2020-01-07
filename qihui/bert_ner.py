@@ -24,6 +24,7 @@ import glob
 import logging
 import os
 import random
+import pickle
 
 import numpy as np
 import torch
@@ -33,13 +34,15 @@ from torch.nn import CrossEntropyLoss
 from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, TensorDataset
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
-from examples.utils_ner import convert_examples_to_features, get_labels, read_examples_from_file
+# from examples.utils_ner import convert_examples_to_features, get_labels, read_examples_from_file
+from qihui.model.utils_yagoref_ner import convert_examples_to_features, get_labels, read_examples_from_file
 
 from transformers import AdamW, get_linear_schedule_with_warmup
-from transformers import WEIGHTS_NAME, BertConfig, BertForTokenClassification, BertTokenizer, WordpieceTokenizer
+from transformers import WEIGHTS_NAME, BertConfig, BertForTokenClassification, BertTokenizer
 from transformers import RobertaConfig, RobertaForTokenClassification, RobertaTokenizer
 from transformers import DistilBertConfig, DistilBertForTokenClassification, DistilBertTokenizer
 from transformers import CamembertConfig, CamembertForTokenClassification, CamembertTokenizer
+from transformers import YagoRefBertConfig, YagoRefBertForTokenClassification
 
 logger = logging.getLogger(__name__)
 
@@ -130,9 +133,13 @@ def train(args, train_dataset, model, tokenizer, labels, pad_token_label_id):
                       "labels": batch[3]}
             if args.model_type != "distilbert":
                 inputs["token_type_ids"] = batch[2] if args.model_type in ["bert", "xlnet"] else None  # XLM and RoBERTa don"t use segment_ids
-
+            if args.yago_reference:
+                inputs['reference_ids'] = batch[4]
+                inputs['reference_weights'] = batch[5]
             outputs = model(**inputs)
+            # logger.info(outputs[1].size())
             loss = outputs[0]  # model outputs are always tuple in pytorch-transformers (see doc)
+            # logger.info(loss.size())
 
             if args.n_gpu > 1:
                 loss = loss.mean()  # mean() to average on multi-gpu parallel training
@@ -221,6 +228,9 @@ def evaluate(args, model, tokenizer, labels, pad_token_label_id, mode, prefix=""
                       "labels": batch[3]}
             if args.model_type != "distilbert":
                 inputs["token_type_ids"] = batch[2] if args.model_type in ["bert", "xlnet"] else None  # XLM and RoBERTa don"t use segment_ids
+            if args.yago_reference:
+                inputs['reference_ids'] = batch[4]
+                inputs['reference_weights'] = batch[5]
             outputs = model(**inputs)
             tmp_eval_loss, logits = outputs[:2]
 
@@ -272,13 +282,22 @@ def load_and_cache_examples(args, tokenizer, labels, pad_token_label_id, mode):
     cached_features_file = os.path.join(args.data_dir, "cached_{}_{}_{}".format(mode,
         list(filter(None, args.model_name_or_path.split("/"))).pop(),
         str(args.max_seq_length)))
-    if os.path.exists(cached_features_file) and not args.overwrite_cache:
+    cached_yago_file = os.path.join(args.data_dir, "cached_{}_{}_{}_yago".format(mode,
+                                                                                 list(filter(None,
+                                                                                             args.model_name_or_path.split(
+                                                                                                 "/"))).pop(),
+                                                                                 str(args.max_seq_length)))
+    if (os.path.exists(cached_features_file) and not args.overwrite_cache and not args.yago_reference) or \
+        (os.path.exists(cached_features_file) and not args.overwrite_cache and args.yago_reference and os.path.exists(cached_yago_file)):
         logger.info("Loading features from cached file %s", cached_features_file)
         features = torch.load(cached_features_file)
+        if args.yago_reference:
+            logger.info("Loading additional yago features from cached file %s", cached_yago_file)
+            ref_features = torch.load(cached_yago_file)
     else:
         logger.info("Creating features from dataset file at %s", args.data_dir)
         examples = read_examples_from_file(args.data_dir, mode)
-        features = convert_examples_to_features(examples, labels, args.max_seq_length, tokenizer,
+        features,ref_features = convert_examples_to_features(examples, labels, args.max_seq_length, tokenizer,
                                                 cls_token_at_end=bool(args.model_type in ["xlnet"]),
                                                 # xlnet has a cls token at the end
                                                 cls_token=tokenizer.cls_token,
@@ -290,11 +309,15 @@ def load_and_cache_examples(args, tokenizer, labels, pad_token_label_id, mode):
                                                 # pad on the left for xlnet
                                                 pad_token=tokenizer.convert_tokens_to_ids([tokenizer.pad_token])[0],
                                                 pad_token_segment_id=4 if args.model_type in ["xlnet"] else 0,
-                                                pad_token_label_id=pad_token_label_id
+                                                pad_token_label_id=pad_token_label_id,
+                                                yago_reference=args.yago_reference,
+                                                max_ref=args.max_reference_num if args.yago_reference else None
                                                 )
         if args.local_rank in [-1, 0]:
             logger.info("Saving features into cached file %s", cached_features_file)
             torch.save(features, cached_features_file)
+            if args.yago_reference:
+                torch.save(ref_features, cached_yago_file)
 
     if args.local_rank == 0 and not evaluate:
         torch.distributed.barrier()  # Make sure only the first process in distributed training process the dataset, and the others will use the cache
@@ -305,7 +328,18 @@ def load_and_cache_examples(args, tokenizer, labels, pad_token_label_id, mode):
     all_segment_ids = torch.tensor([f.segment_ids for f in features], dtype=torch.long)
     all_label_ids = torch.tensor([f.label_ids for f in features], dtype=torch.long)
 
-    dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids)
+    if args.yago_reference:
+
+        # assert(len(ref_features[0].reference_ids)==len(ref_features[0].reference_weights))
+        # assert (len(ref_features[0].reference_ids[0]) == len(ref_features[0].reference_weights[0]))
+        all_reference_ids = torch.tensor([r.reference_ids for r in ref_features], dtype=torch.long)
+        # print(all_reference_ids.size())
+        all_reference_weights = torch.tensor([r.reference_weights for r in ref_features], dtype=torch.float)
+        # print(all_reference_weights.size())
+        dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids,
+                                all_reference_ids, all_reference_weights)
+    else:
+        dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids)
     return dataset
 
 
@@ -393,8 +427,18 @@ def main():
     parser.add_argument("--server_ip", type=str, default="", help="For distant debugging.")
     parser.add_argument("--server_port", type=str, default="", help="For distant debugging.")
     parser.add_argument("--random_start", action="store_true")
+    parser.add_argument("--yago_reference", action="store_true")
+    parser.add_argument("--max_reference_num", type=int, default=10,
+                        help="Number of yago types considered as references")
 
     args = parser.parse_args()
+
+    if args.yago_reference:
+        REFERENCE_SIZE = 1000
+
+    if args.yago_reference:
+        with open('/work/smt3/wwang/TAC2019/qihui_data/yago/YagoReference.pickle', 'rb') as ref_pickle: #TODO:
+            ref_dict = pickle.load(ref_pickle)
 
     if os.path.exists(args.output_dir) and os.listdir(
             args.output_dir) and args.do_train and not args.overwrite_output_dir:
@@ -443,28 +487,42 @@ def main():
 
     args.model_type = args.model_type.lower()
     config_class, model_class, tokenizer_class = MODEL_CLASSES[args.model_type]
-    config = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path,
+    bertconfig = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path,
                                           num_labels=num_labels,
                                           cache_dir=args.cache_dir if args.cache_dir else None)
     tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,
                                                 do_lower_case=args.do_lower_case,
                                                 cache_dir=args.cache_dir if args.cache_dir else None)
+    if not args.yago_reference:
+        config = bertconfig
+        """
+            Test the ablation of pretrained model
+            """
+        if args.random_start:
+            model = BertForTokenClassification(config)
+        else:
+            model = model_class.from_pretrained(args.model_name_or_path,
+                                                from_tf=bool(".ckpt" in args.model_name_or_path),
+                                                config=config,
+                                                cache_dir=args.cache_dir if args.cache_dir else None)
+    else:
+        config = YagoRefBertConfig(bertconfig.__dict__, reference_size=REFERENCE_SIZE,
+                                   num_labels=num_labels,
+                                   cache_dir=args.cache_dir if args.cache_dir else None
+                                   )
+        logger.info("number of labels %d", config.num_labels)
+        model = YagoRefBertForTokenClassification.from_pretrained(args.model_name_or_path,
+                                                from_tf=bool(".ckpt" in args.model_name_or_path),
+                                                config=config,
+                                                cache_dir=args.cache_dir if args.cache_dir else None)
+
 
     # model = model_class.from_pretrained(args.model_name_or_path,
     #                                     from_tf=bool(".ckpt" in args.model_name_or_path),
     #                                     config=config,
     #                                     cache_dir=args.cache_dir if args.cache_dir else None)
 
-    """
-    Test the ablation of pretrained model
-    """
-    if args.random_start:
-        model = BertForTokenClassification(config)
-    else:
-        model = model_class.from_pretrained(args.model_name_or_path,
-                                            from_tf=bool(".ckpt" in args.model_name_or_path),
-                                            config=config,
-                                            cache_dir=args.cache_dir if args.cache_dir else None)
+
 
 
     if args.local_rank == 0:

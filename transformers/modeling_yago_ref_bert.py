@@ -33,10 +33,11 @@ class YagoRefBertEmbeddings(nn.Module):
         self.LayerNorm = BertLayerNorm(config.hidden_size, eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
-    def forward(self, input_ids=None, token_type_ids=None, position_ids=None, inputs_embeds=None, reference_ids = None):
     """
     **reference_ids**: ``torch.LongTensor`` of shape ``(batch_size, sequence_length, max_types_num)``:
     """
+    def forward(self, input_ids=None, token_type_ids=None, position_ids=None, inputs_embeds=None, reference_ids = None, reference_weights = None):
+
         if input_ids is not None:
             input_shape = input_ids.size()
         else:
@@ -56,8 +57,12 @@ class YagoRefBertEmbeddings(nn.Module):
         token_type_embeddings = self.token_type_embeddings(token_type_ids)
 
         epsilon = 1e-6
-        reference_embeddings = torch.sum(self.reference_embeddings(reference_ids), dim=-1)/ \
-            ((reference_ids!=0).sum(dim=-1)+epsilon) # hope it works...
+        # print('embedding dim')
+        # print(self.reference_embeddings(reference_ids).size())
+        # print('weight_dim')
+        # print(torch.unsqueeze(reference_weights, dim=-1).size())
+        reference_embeddings = torch.sum(self.reference_embeddings(reference_ids)*torch.unsqueeze(reference_weights, dim=-1), dim=-2) # hope it works...
+        # print(reference_embeddings.size())
         embeddings = inputs_embeds + position_embeddings + token_type_embeddings + reference_embeddings
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
@@ -74,8 +79,9 @@ class YagoRefBertModel(BertModel):
 
         self.init_weights()
 
-    def forward(self, input_ids=None, reference_ids=None, attention_mask=None, token_type_ids=None, position_ids=None,
-                head_mask=None, inputs_embeds=None, encoder_hidden_states=None, encoder_attention_mask=None):
+    def forward(self, input_ids=None, attention_mask=None, token_type_ids=None, position_ids=None,
+                head_mask=None, inputs_embeds=None, encoder_hidden_states=None, encoder_attention_mask=None,
+                reference_ids=None, reference_weights=None):
         """ Forward pass on the Model.
 
         The model can behave as an encoder (with only self-attention) as well
@@ -98,7 +104,7 @@ class YagoRefBertModel(BertModel):
         elif inputs_embeds is not None:
             input_shape = inputs_embeds.size()[:-1]
         else:
-            raise ValueError("You have to specify either input_ids or inputs_embeds")
+            raise ValueError("You have to specify either input_ids (+ reference_ids) or inputs_embeds")
 
         device = input_ids.device if input_ids is not None else inputs_embeds.device
 
@@ -167,7 +173,8 @@ class YagoRefBertModel(BertModel):
         else:
             head_mask = [None] * self.config.num_hidden_layers
 
-        embedding_output = self.embeddings(input_ids=input_ids, position_ids=position_ids, token_type_ids=token_type_ids, inputs_embeds=inputs_embeds, reference_ids=reference_ids)
+        embedding_output = self.embeddings(input_ids=input_ids, position_ids=position_ids, token_type_ids=token_type_ids, inputs_embeds=inputs_embeds,
+                                           reference_ids=reference_ids, reference_weights=reference_weights)
         encoder_outputs = self.encoder(embedding_output,
                                        attention_mask=extended_attention_mask,
                                        head_mask=head_mask,
@@ -188,9 +195,9 @@ class YagoRefBertForPreTraining(BertForPreTraining):
 
         self.init_weights()
 
-    def forward(self, input_ids=None, attention_mask=None, token_type_ids=None, position_ids=None, reference_ids=None, 
-                head_mask=None, inputs_embeds=None,
-                masked_lm_labels=None, next_sentence_label=None):
+    def forward(self, input_ids=None, attention_mask=None, token_type_ids=None, position_ids=None,
+                head_mask=None, inputs_embeds=None, masked_lm_labels=None, next_sentence_label=None,
+                reference_ids=None, reference_weights=None):
 
         outputs = self.bert(input_ids,
                             attention_mask=attention_mask,
@@ -198,7 +205,8 @@ class YagoRefBertForPreTraining(BertForPreTraining):
                             position_ids=position_ids,
                             head_mask=head_mask,
                             inputs_embeds=inputs_embeds,
-                            reference_ids=reference_ids)
+                            reference_ids=reference_ids,
+                            reference_weights=reference_weights)
 
         sequence_output, pooled_output = outputs[:2]
         prediction_scores, seq_relationship_score = self.cls(sequence_output, pooled_output)
@@ -218,6 +226,7 @@ class YagoRefBertForTokenClassification(BertForTokenClassification):
     def __init__(self, config):
         super(YagoRefBertForTokenClassification, self).__init__(config)
         self.num_labels = config.num_labels
+        # logger.info("number of labels %d", self.num_labels)
 
         self.bert = YagoRefBertModel(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
@@ -226,7 +235,8 @@ class YagoRefBertForTokenClassification(BertForTokenClassification):
         self.init_weights()
 
     def forward(self, input_ids=None, attention_mask=None, token_type_ids=None,
-                position_ids=None, reference_ids=None, head_mask=None, inputs_embeds=None, labels=None):
+                position_ids=None, head_mask=None, inputs_embeds=None, labels=None,
+                reference_ids=None, reference_weights=None):
 
         outputs = self.bert(input_ids,
                             attention_mask=attention_mask,
@@ -234,7 +244,8 @@ class YagoRefBertForTokenClassification(BertForTokenClassification):
                             position_ids=position_ids,
                             head_mask=head_mask,
                             inputs_embeds=inputs_embeds,
-                            reference_ids=reference_ids)
+                            reference_ids=reference_ids,
+                            reference_weights=reference_weights)
 
         sequence_output = outputs[0]
 

@@ -1,9 +1,10 @@
 import pickle
 import random
-from typing import List
+from typing import List, Dict
 from transformers import BertTokenizer
 import os
 import logging
+from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,13 @@ class InputFeatures(object):
         self.segment_ids = segment_ids
         self.output_ids = output_ids
         self.is_next = is_next
+
+class ReferenceFeatures(object):
+    """Structure to store additional yago reference input"""
+
+    def __init__(self, reference_ids, reference_weights):
+        self.reference_ids = reference_ids
+        self.reference_weights = reference_weights
 
 def generate_masked_sent(tokenizer: BertTokenizer, sent: str, mask_token: str, mask_rate:float=0.15):
     words = tokenizer.tokenize(sent)
@@ -78,7 +86,7 @@ def read_examples_from_pickle(data_dir):
     for file in os.listdir(data_dir):
         if file.startswith("cached_"):
             continue
-        if test_mod and not file.startswith('book'):
+        if test_mod and not file.startswith('wiki'):
             continue
         with open(os.path.join(data_dir, file), 'rb') as fin:
             logger.info("reading pickle file {}".format(file))
@@ -89,7 +97,7 @@ def read_examples_from_pickle(data_dir):
                     test_files += 1
             except:
                 logger.info("failed to read pickle file {}".format(file))
-        if test_mod and test_files == 2:
+        if test_mod and test_files == 1:
             break            
     return examples
 
@@ -98,12 +106,22 @@ def convert_examples_to_features(examples,
                                 max_seq_length,
                                 pad_token_id=0,
                                 pad_token_segment_id=0,
-                                mask_padding_with_zero=True):
+                                mask_padding_with_zero=True,
+                                yago_ref=False,
+                                MAX_NUM_REFERENCE=10):
     features = []
-    for (ex_idx, example) in enumerate(examples):
-        if ex_idx % 10000 == 0:
-            logger.info("Writing example %d of %d", ex_idx, len(examples))
+    ref_features = []
+    if yago_ref:
+        with open('/work/smt3/wwang/TAC2019/qihui_data/yago/YagoReference.pickle', 'rb') as ref_pickle: #TODO:
+            ref_dict: Dict = pickle.load(ref_pickle)
 
+    exp_iterator = tqdm(examples, desc='Instances', total=len(examples))
+    count_example = 0
+    test_mod = True
+    for example in exp_iterator:
+        count_example += 1
+        if test_mod and count_example == 1000:
+            break
         masked_tokens = example.tokens
         output_tokens = type(masked_tokens)(masked_tokens)
         segment_ids = example.segment_ids
@@ -121,6 +139,21 @@ def convert_examples_to_features(examples,
         input_mask = [1 if mask_padding_with_zero else 0]*len(input_ids)
         padding_length = max_seq_length - len(input_ids)
 
+        if yago_ref:
+            reference_ids = [(list(ref_dict[input_id].keys()) if (input_id in ref_dict) else [pad_token_id]) for input_id in input_ids]
+            reference_weights = [(list(ref_dict[input_id].values()) if (input_id in ref_dict) else [0.0]) for input_id in input_ids]
+            assert (len(reference_ids)==len(input_ids))
+
+            max_ref = MAX_NUM_REFERENCE
+
+            for i in range(len(reference_ids)):
+                assert (len(reference_ids[i]) == len(reference_weights[i]))
+                reference_ids[i] += [pad_token_id]*(max_ref-len(reference_ids[i]))
+                reference_weights[i] +=  [0.0]*(max_ref-len(reference_weights[i]))
+                assert (len(reference_ids[i]) == len(reference_weights[i]))
+            reference_ids += [[pad_token_id]*max_ref]*padding_length
+            reference_weights += [[0.0]*max_ref]*padding_length
+            ref_features.append(ReferenceFeatures(reference_ids=reference_ids, reference_weights=reference_weights))
         # zero-pad up to the sequence length.
         input_ids += [pad_token_id]*padding_length
         input_mask += [0 if mask_padding_with_zero else 1] * padding_length
@@ -132,4 +165,7 @@ def convert_examples_to_features(examples,
         assert(len(segment_ids)== max_seq_length)
         assert(len(output_ids)== max_seq_length)
         features.append(InputFeatures(input_ids, input_mask, segment_ids, output_ids, 0 if example.is_random_next else 1))
-    return(features)
+
+
+
+    return(features, ref_features)
