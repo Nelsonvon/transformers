@@ -79,6 +79,18 @@ class YagoRefBertModel(BertModel):
 
         self.init_weights()
 
+    def init_weights(self):
+        """ Initialize and prunes weights if needed. """
+        # Initialize weights
+        self.apply(self._init_weights)
+
+        # Prune heads if needed
+        if self.config.pruned_heads:
+            self.prune_heads(self.config.pruned_heads)
+
+        # Tie weights if needed
+        self.tie_weights()
+
     def forward(self, input_ids=None, attention_mask=None, token_type_ids=None, position_ids=None,
                 head_mask=None, inputs_embeds=None, encoder_hidden_states=None, encoder_attention_mask=None,
                 reference_ids=None, reference_weights=None):

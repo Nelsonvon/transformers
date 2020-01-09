@@ -164,7 +164,12 @@ def convert_examples_to_features(examples,
         assert(len(input_mask)== max_seq_length)
         assert(len(segment_ids)== max_seq_length)
         assert(len(output_ids)== max_seq_length)
-        features.append(InputFeatures(input_ids, input_mask, segment_ids, output_ids, 0 if example.is_random_next else 1))
+        features.append(InputFeatures(input_ids, input_mask, segment_ids, output_ids, 1 if example.is_random_next else 0))
+        """next_sentence_label:
+            ``0`` indicates sequence B is a continuation of sequence A,
+            ``1`` indicates sequence B is a random sequence.
+
+        """
 
 
 

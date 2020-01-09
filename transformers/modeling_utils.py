@@ -247,6 +247,7 @@ class PreTrainedModel(nn.Module):
         # If we save using the predefined names, we can load using `from_pretrained`
         output_model_file = os.path.join(save_directory, WEIGHTS_NAME)
         torch.save(model_to_save.state_dict(), output_model_file)
+        # logger.info(model_to_save.state_dict().keys())
         logger.info("Model weights saved in {}".format(output_model_file))
 
     @classmethod
