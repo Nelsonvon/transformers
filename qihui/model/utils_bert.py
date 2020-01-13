@@ -20,15 +20,16 @@ class TrainingInstance(object):
     self.masked_lm_positions = masked_lm_positions
     self.masked_lm_labels = masked_lm_labels
 
+
 class InputFeatures(object):
     """A single training instance as feature"""
 
-    def __init__(self, input_ids, input_mask, segment_ids, output_ids, is_next):
+    def __init__(self, input_ids, input_mask, segment_ids, output_ids, is_random_next):
         self.input_ids = input_ids
         self.input_mask = input_mask
         self.segment_ids = segment_ids
         self.output_ids = output_ids
-        self.is_next = is_next
+        self.is_random_next = is_random_next
 
 class ReferenceFeatures(object):
     """Structure to store additional yago reference input"""
@@ -79,11 +80,13 @@ def examples_generator(tokenizer: BertTokenizer, corpus_pickle: str, save_exampl
         words = [cls_token] + words_1 + [sep_token] + words_2 + [sep_token]
         labels = [pad_token] + labels_1 + [sep_token] + words_2 + [sep_token]
 
-def read_examples_from_pickle(data_dir):
+def read_examples_from_pickle(data_dir, file_list=None):
     test_mod = True
     test_files = 0
     examples = []
-    for file in os.listdir(data_dir):
+    if file_list is None:
+        file_list = os.listdir(data_dir)
+    for file in file_list:
         if file.startswith("cached_"):
             continue
         if test_mod and not file.startswith('wiki'):

@@ -25,6 +25,7 @@ import logging
 import os
 import random
 import pickle
+import datetime
 
 import numpy as np
 import torch
@@ -170,9 +171,13 @@ def train(args, train_dataset, model, tokenizer, labels, pad_token_label_id):
                     #     logger.info(model.bert.embeddings.word_embeddings(torch.tensor([embed_sample_i*100+5]).to(args.device))[0][:10])
                     # Log metrics
                     if args.local_rank == -1 and args.evaluate_during_training:  # Only evaluate when single GPU otherwise metrics may not average well
-                        results, _ = evaluate(args, model, tokenizer, labels, pad_token_label_id, mode="dev")
+                        results, _ = evaluate(args, model, tokenizer, labels, pad_token_label_id, mode="dev", prefix=str(int(global_step / args.logging_steps)))
                         for key, value in results.items():
                             tb_writer.add_scalar("eval_{}".format(key), value, global_step)
+                    if args.local_rank == -1 and args.test_during_training:  # Only evaluate when single GPU otherwise metrics may not average well
+                        results, _ = evaluate(args, model, tokenizer, labels, pad_token_label_id, mode="test", prefix=str(int(global_step / args.logging_steps)))
+                        for key, value in results.items():
+                            tb_writer.add_scalar("test_{}".format(key), value, global_step)
                     tb_writer.add_scalar("lr", scheduler.get_lr()[0], global_step)
                     tb_writer.add_scalar("loss", (tr_loss - logging_loss) / args.logging_steps, global_step)
                     logging_loss = tr_loss
@@ -213,7 +218,7 @@ def evaluate(args, model, tokenizer, labels, pad_token_label_id, mode, prefix=""
         model = torch.nn.DataParallel(model)
 
     # Eval!
-    logger.info("***** Running evaluation %s *****", prefix)
+    logger.info("***** Running %s %s *****", 'evaluation' if mode == 'dev' else 'test',prefix)
     logger.info("  Num examples = %d", len(eval_dataset))
     logger.info("  Batch size = %d", args.eval_batch_size)
     eval_loss = 0.0
@@ -269,7 +274,7 @@ def evaluate(args, model, tokenizer, labels, pad_token_label_id, mode, prefix=""
         "f1": f1_score(out_label_list, preds_list)
     }
 
-    logger.info("***** Eval results %s *****", prefix)
+    logger.info("***** %s results %s *****", 'evaluation' if mode == 'dev' else 'test', prefix)
     for key in sorted(results.keys()):
         logger.info("  %s = %s", key, str(results[key]))
 
@@ -313,7 +318,8 @@ def load_and_cache_examples(args, tokenizer, labels, pad_token_label_id, mode):
                                                 pad_token_segment_id=4 if args.model_type in ["xlnet"] else 0,
                                                 pad_token_label_id=pad_token_label_id,
                                                 yago_reference=args.yago_reference,
-                                                max_ref=args.max_reference_num if args.yago_reference else None
+                                                max_ref=args.max_reference_num if args.yago_reference else None,
+                                                do_lower_case=args.do_lower_case
                                                 )
         if args.local_rank in [-1, 0]:
             logger.info("Saving features into cached file %s", cached_features_file)
@@ -355,8 +361,8 @@ def main():
                         help="Model type selected in the list: " + ", ".join(MODEL_CLASSES.keys()))
     parser.add_argument("--model_name_or_path", default=None, type=str, required=True,
                         help="Path to pre-trained model or shortcut name selected in the list: " + ", ".join(ALL_MODELS))
-    parser.add_argument("--output_dir", default=None, type=str, required=True,
-                        help="The output directory where the model predictions and checkpoints will be written.")
+    # parser.add_argument("--output_dir", default=None, type=str, required=True,
+    #                     help="The output directory where the model predictions and checkpoints will be written.")
 
     ## Other parameters
     parser.add_argument("--labels", default="", type=str,
@@ -378,6 +384,8 @@ def main():
                         help="Whether to run predictions on the test set.")
     parser.add_argument("--evaluate_during_training", action="store_true",
                         help="Whether to run evaluation during training at each logging step.")
+    parser.add_argument("--test_during_training", action="store_true",
+                        help="Whether to run test during training at each logging step.")
     parser.add_argument("--do_lower_case", action="store_true",
                         help="Set this flag if you are using an uncased model.")
 
@@ -410,6 +418,8 @@ def main():
                         help="Save checkpoint every X updates steps.")
     parser.add_argument("--eval_all_checkpoints", action="store_true",
                         help="Evaluate all checkpoints starting with the same prefix as model_name ending and ending with step number")
+    parser.add_argument("--test_all_checkpoints", action="store_true",
+                        help="Evaluate all checkpoints starting with the same prefix as model_name ending and ending with step number")
     parser.add_argument("--no_cuda", action="store_true",
                         help="Avoid using CUDA when available")
     parser.add_argument("--overwrite_output_dir", action="store_true",
@@ -432,15 +442,55 @@ def main():
     parser.add_argument("--yago_reference", action="store_true")
     parser.add_argument("--max_reference_num", type=int, default=10,
                         help="Number of yago types considered as references")
+    parser.add_argument("--additional_output_tag", type=str, default="",
+                        help="Additional tag to distinguish from other models")
+    parser.add_argument("--do_significant_check", action="store_true",
+                        help="Whether to check if the influence of reference embedding is significant")
+
 
     args = parser.parse_args()
+
+    DEFAULT_DATA_REPO = '/work/smt2/qfeng/Project/huggingface/datasets/'
+    DEFAULT_CACHE_REPO = '/work/smt2/qfeng/Project/huggingface/pretrain/'
+    DEFAULT_OUTPUT_REPO = '/work/smt2/qfeng/Project/huggingface/models/'
+
+    if '/' not in args.data_dir:
+        args.data_dir = DEFAULT_DATA_REPO + args.data_dir
+    if '/' not in args.cache_dir:
+        if args.cache_dir == "":
+            args.cache_dir = DEFAULT_CACHE_REPO + args.model_name_or_path[len('bert-'):]
+        else:
+            args.cache_dir = DEFAULT_CACHE_REPO + args.cache_dir
+    if args.labels == "":
+        if os.path.exists(os.path.join(args.data_dir, 'labels.txt')):
+            args.labels = os.path.join(args.data_dir, 'labels.txt')
+        else:
+            raise ValueError("Invalid or missing labels file!")
+    if '-uncased' in args.model_name_or_path:
+        args.do_lower_case = True
+    elif '-cased' in args.model_name_or_path:
+        args.do_lower_case = False
+
+    # name the output diretory according to the used model, time tag, usage of yago reference
+    output_dir = args.model_name_or_path[len('bert-'):]
+    if args.yago_reference:
+        output_dir += "_yagoref"
+    if args.additional_output_tag != "":
+        output_dir += '_' + args.additional_output_tag
+    else:
+        now_time = datetime.datetime.now()
+        output_dir += '_'+'-'.join(str(i) for i in list(now_time.timetuple()[1:3])) # 'month-date'
+
+    args.output_dir = DEFAULT_OUTPUT_REPO + output_dir
+    logger.info("output model to file {}".format(output_dir))
+
 
     if args.yago_reference:
         REFERENCE_SIZE = 1000
 
-    if args.yago_reference:
-        with open('/work/smt3/wwang/TAC2019/qihui_data/yago/YagoReference.pickle', 'rb') as ref_pickle: #TODO:
-            ref_dict = pickle.load(ref_pickle)
+    # if args.yago_reference:
+    #     with open('/work/smt3/wwang/TAC2019/qihui_data/yago/YagoReference.pickle', 'rb') as ref_pickle: #TODO:
+    #         ref_dict = pickle.load(ref_pickle)
 
     if os.path.exists(args.output_dir) and os.listdir(
             args.output_dir) and args.do_train and not args.overwrite_output_dir:
@@ -474,6 +524,9 @@ def main():
     logger.warning("Process rank: %s, device: %s, n_gpu: %s, distributed training: %s, 16-bits training: %s",
                    args.local_rank, device, args.n_gpu, bool(args.local_rank != -1), args.fp16)
 
+    args.logging_steps = int(args.logging_steps/args.n_gpu)
+    args.save_steps = int(args.save_steps/args.n_gpu)
+
     # Set seed
     set_seed(args)
 
@@ -489,14 +542,16 @@ def main():
 
     args.model_type = args.model_type.lower()
     config_class, model_class, tokenizer_class = MODEL_CLASSES[args.model_type]
-    bertconfig = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path,
-                                          num_labels=num_labels,
-                                          cache_dir=args.cache_dir if args.cache_dir else None)
+    # bertconfig = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path,
+    #                                       num_labels=num_labels,
+    #                                       cache_dir=args.cache_dir if args.cache_dir else None)
     tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,
                                                 do_lower_case=args.do_lower_case,
                                                 cache_dir=args.cache_dir if args.cache_dir else None)
     if not args.yago_reference:
-        config = bertconfig
+        config = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path,
+                                          num_labels=num_labels,
+                                          cache_dir=args.cache_dir if args.cache_dir else None)
         """
             Test the ablation of pretrained model
             """
@@ -508,11 +563,16 @@ def main():
                                                 config=config,
                                                 cache_dir=args.cache_dir if args.cache_dir else None)
     else:
-        config = YagoRefBertConfig(bertconfig.__dict__, reference_size=REFERENCE_SIZE,
+        # config = YagoRefBertConfig(bertconfig.__dict__, reference_size=REFERENCE_SIZE,
+        #                            num_labels=num_labels,
+        #                            cache_dir=args.cache_dir if args.cache_dir else None
+        #                            )
+        config = YagoRefBertConfig.from_pretrained(args.config_name if args.config_name else args.model_name_or_path, reference_size=REFERENCE_SIZE,
                                    num_labels=num_labels,
                                    cache_dir=args.cache_dir if args.cache_dir else None
                                    )
         logger.info("number of labels %d", config.num_labels)
+        logger.info("vocab size: %d", config.vocab_size)
         model = YagoRefBertForTokenClassification.from_pretrained(args.model_name_or_path,
                                                 from_tf=bool(".ckpt" in args.model_name_or_path),
                                                 config=config,
@@ -533,6 +593,12 @@ def main():
     model.to(args.device)
 
     logger.info("Training/evaluation parameters %s", args)
+
+    if args.overwrite_cache:
+        load_and_cache_examples(args, tokenizer, labels, pad_token_label_id, mode="train")
+        load_and_cache_examples(args, tokenizer, labels, pad_token_label_id, mode="dev")
+        load_and_cache_examples(args, tokenizer, labels, pad_token_label_id, mode="test")
+        args.overwrite_cache=False
 
     # Training
     if args.do_train:
@@ -566,7 +632,7 @@ def main():
             logging.getLogger("pytorch_transformers.modeling_utils").setLevel(logging.WARN)  # Reduce logging
         logger.info("Evaluate the following checkpoints: %s", checkpoints)
         for checkpoint in checkpoints:
-            global_step = checkpoint.split("-")[-1] if len(checkpoints) > 1 else ""
+            global_step = checkpoint.split("-")[-1] if len(checkpoint.split("-")[-1]) > 2 else checkpoint
             if args.yago_reference:
                 model = YagoRefBertForTokenClassification.from_pretrained(checkpoint)
             else:
@@ -583,17 +649,34 @@ def main():
 
     if args.do_predict and args.local_rank in [-1, 0]:
         # tokenizer = tokenizer_class.from_pretrained(args.output_dir, do_lower_case=args.do_lower_case)
+        checkpoints = [args.output_dir]
+        if args.test_all_checkpoints:
+            checkpoints = list(
+                os.path.dirname(c) for c in sorted(glob.glob(args.output_dir + "/**/" + WEIGHTS_NAME, recursive=True)))
+            logging.getLogger("pytorch_transformers.modeling_utils").setLevel(logging.WARN)  # Reduce logging
+        logger.info("Test the following checkpoints: %s", checkpoints)
+        for checkpoint in checkpoints:
+            global_step = checkpoint.split("-")[-1] if len(checkpoint.split("-")[-1]) > 2 else checkpoint
+            if args.yago_reference:
+                model = YagoRefBertForTokenClassification.from_pretrained(checkpoint)
+            else:
+                model = model_class.from_pretrained(checkpoint)
+            model.to(args.device)
+            result, _ = evaluate(args, model, tokenizer, labels, pad_token_label_id, mode="test", prefix=global_step)
+            if global_step:
+                result = {"{}_{}".format(global_step, k): v for k, v in result.items()}
+            results.update(result)
+        output_eval_file = os.path.join(args.output_dir, "test_results.txt")
+        with open(output_eval_file, "w") as writer:
+            for key in sorted(results.keys()):
+                writer.write("{} = {}\n".format(key, str(results[key])))
+
         if args.yago_reference:
             model = YagoRefBertForTokenClassification.from_pretrained(args.output_dir, config=config)
         else:
             model = model_class.from_pretrained(args.output_dir)
         model.to(args.device)
         result, predictions = evaluate(args, model, tokenizer, labels, pad_token_label_id, mode="test")
-        # Save results
-        output_test_results_file = os.path.join(args.output_dir, "test_results.txt")
-        with open(output_test_results_file, "w") as writer:
-            for key in sorted(result.keys()):
-                writer.write("{} = {}\n".format(key, str(result[key])))
         # Save predictions
         output_test_predictions_file = os.path.join(args.output_dir, "test_predictions.txt")
         with open(output_test_predictions_file, "w") as writer:
@@ -610,6 +693,47 @@ def main():
                     else:
                         logger.warning("Maximum sequence length exceeded: No prediction for '%s'.", line.split()[0])
 
+    # Temporary code: check whether the values of reference_embedding are significant
+    if args.do_significant_check and args.yago_reference:
+        model = YagoRefBertForTokenClassification.from_pretrained(args.output_dir, config=config)
+        bertconfig = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path,
+                                              num_labels=num_labels,
+                                              cache_dir=args.cache_dir if args.cache_dir else None)
+        model_pretrain = BertForTokenClassification.from_pretrained(args.model_name_or_path,
+                                                from_tf=bool(".ckpt" in args.model_name_or_path),
+                                                config=bertconfig,
+                                                cache_dir=args.cache_dir if args.cache_dir else None)
+        model.to(args.device)
+        model.eval()
+        model_pretrain.to(args.device)
+        model_pretrain.eval()
+        # logger.info(model.bert.embeddings.word_embeddings.weight.size())
+        with open('/work/smt3/wwang/TAC2019/qihui_data/yago/YagoReference{}.pickle'.format("" if args.do_lower_case else "_cased"), 'rb') as ref_pickle: #TODO:
+            ref_dict = pickle.load(ref_pickle)
+        cos_sim = []
+        ref_vec_norm = []
+        cos = torch.nn.CosineSimilarity(dim=0, eps=1e-6)
+        for id in range(config.vocab_size):
+            if id in ref_dict:
+                word_embedding = model.bert.embeddings.word_embeddings(torch.tensor(id, dtype=torch.long, device=args.device))
+                ref_id_list = torch.tensor(list(ref_dict[id].keys()), dtype=torch.long, device=args.device)
+                ref_id_weight = torch.tensor(list(ref_dict[id].values()), dtype=torch.float, device=args.device)
+                reference_embeddings = model.bert.embeddings.reference_embeddings(ref_id_list)*torch.unsqueeze(ref_id_weight, dim=-1)
+                # logger.info(reference_embeddings.size())
+                reference_embedding = torch.sum(reference_embeddings,dim=-2)
+                vec_norm = torch.norm(reference_embedding)
+                ref_vec_norm.append(vec_norm)
+                pretrain_word_embedding = model_pretrain.bert.embeddings.word_embeddings(torch.tensor(id, dtype=torch.long, device=args.device))
+                # logger.info(vec_norm/torch.norm(word_embedding))
+                cos_sim.append(cos(word_embedding+reference_embedding, pretrain_word_embedding))
+                # logger.info(cos(word_embedding, reference_embedding))
+                assert (word_embedding.size() == reference_embedding.size())
+        # word_embedding_norm = torch.norm(model.bert.embeddings.word_embeddings.weight, p=2, dim=1)
+        # reference_embedding_norm = torch.norm(model.bert.embeddings.reference_embeddings.weight, p=2, dim=1)
+        avg_sim = sum(cos_sim)/len(cos_sim)
+        avg_ratio = sum(ref_vec_norm)/len(ref_vec_norm)
+        logger.info(avg_sim)
+        logger.info(avg_ratio)
     return results
 
 

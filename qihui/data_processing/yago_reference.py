@@ -8,9 +8,9 @@ MAX_NUM_TYPES=10
 
 if True: #__name__= '__main__'
     do_lower_case=True
-    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased',
-                                                      do_lower_case=True,
-                                                      cache_dir='/work/smt2/qfeng/Project/huggingface/pretrain/base_uncased')
+    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased' if do_lower_case else 'bert-base-cased',
+                                                      do_lower_case=do_lower_case,
+                                                      cache_dir='/work/smt2/qfeng/Project/huggingface/pretrain/{}'.format('base-uncased' if do_lower_case else 'base-cased'))
 
     type_idx_dict = {tokenizer.pad_token: tokenizer.pad_token_id}
     idx_type_dict = {tokenizer.pad_token_id: tokenizer.pad_token}
@@ -58,8 +58,8 @@ if True: #__name__= '__main__'
     # XTODO: normalize
     for token_id in reference_dict:
         norm_reference = {k: v for k, v in sorted(reference_dict[token_id].items(), key=lambda item: item[1], reverse=True)}
-        if len(norm_reference) > MAX_NUM_TYPES:
-            norm_reference = {k: v for k, v in list(norm_reference.items())[:MAX_NUM_TYPES]}
+        # if len(norm_reference) > MAX_NUM_TYPES:
+        #     norm_reference = {k: v for k, v in list(norm_reference.items())[:MAX_NUM_TYPES]}
         sum_occur = sum(list(norm_reference.values()))
         for k in norm_reference:
             norm_reference[k] = norm_reference[k] / sum_occur
@@ -70,7 +70,7 @@ if True: #__name__= '__main__'
         for count, token_id in enumerate(reference_dict):
             print(tokenizer.convert_ids_to_tokens([token_id]))
             print({idx_type_dict[ent_id]: reference_dict[token_id][ent_id] for ent_id in reference_dict[token_id]})
-            if count == 100:
+            if count == 10:
                 break
 
     print("# Reference vocab: {}".format(str(len(reference_dict))))
@@ -80,10 +80,10 @@ if True: #__name__= '__main__'
     # XTODO: save statistics
 
 
-    with open('/work/smt3/wwang/TAC2019/qihui_data/yago/YagoReference.pickle', 'wb') as fout:
+    with open('/work/smt3/wwang/TAC2019/qihui_data/yago/YagoReference{}_unlimit.pickle'.format('' if do_lower_case else '_cased'), 'wb') as fout:
         pickle.dump(reference_dict, fout, protocol=pickle.HIGHEST_PROTOCOL)
-    with open('/work/smt3/wwang/TAC2019/qihui_data/yago/type_idx_dicts.pickle', 'wb') as fout:
+    with open('/work/smt3/wwang/TAC2019/qihui_data/yago/type_idx_dicts{}_unlimit.pickle'.format('' if do_lower_case else '_cased'), 'wb') as fout:
         pickle.dump(type_idx_dict, fout, protocol=pickle.HIGHEST_PROTOCOL)
-    with open('/work/smt3/wwang/TAC2019/qihui_data/yago/idx_type_dicts.pickle', 'wb') as fout:
+    with open('/work/smt3/wwang/TAC2019/qihui_data/yago/idx_type_dicts{}_unlimit.pickle'.format('' if do_lower_case else '_cased'), 'wb') as fout:
         pickle.dump(idx_type_dict, fout, protocol=pickle.HIGHEST_PROTOCOL)
 

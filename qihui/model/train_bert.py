@@ -287,7 +287,7 @@ def evaluate(args, model, tokenizer, labels, pad_token_label_id, mode, prefix=""
     return results, preds_list
 
 
-def load_and_cache_examples(args, tokenizer, pad_token_label_id, mode):
+def load_and_cache_examples(args, tokenizer, mode):
     if args.local_rank not in [-1, 0] and not evaluate:
         torch.distributed.barrier()  # Make sure only the first process in distributed training process the dataset, and the others will use the cache
 
@@ -310,6 +310,7 @@ def load_and_cache_examples(args, tokenizer, pad_token_label_id, mode):
         logger.info("Creating features from dataset file at %s", args.data_dir)
         examples = read_examples_from_pickle(args.data_dir)
         features, ref_features = convert_examples_to_features(examples, tokenizer, args.max_seq_length, yago_ref=args.yago_reference)
+        del examples # otherwise may cause out of memory
 
         if args.local_rank in [-1, 0]:
             logger.info("Saving features into cached file %s", cached_features_file)
@@ -340,6 +341,45 @@ def load_and_cache_examples(args, tokenizer, pad_token_label_id, mode):
         dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_output_ids, all_next_sentence_label)
 
     return dataset
+
+# def load_example_part(args, tokenizer, part_idx):
+#     """
+#         Don't save or load any cached features
+#     """
+#     pickle_list = os.listdir(args.data_dir)
+#     wiki_list = []
+#     book_list = []
+#     for pickle_file in pickle_list:
+#
+#
+#     logger.info("Creating features from dataset file at %s", args.data_dir)
+#     examples = read_examples_from_pickle(args.data_dir)
+#     features, ref_features = convert_examples_to_features(examples, tokenizer, args.max_seq_length, yago_ref=args.yago_reference)
+#     del examples # otherwise may cause out of memory
+#
+#     if args.local_rank == 0 and not evaluate:
+#         torch.distributed.barrier()  # Make sure only the first process in distributed training process the dataset, and the others will use the cache
+#
+#     # Convert to Tensors and build dataset
+#     all_input_ids = torch.tensor([f.input_ids for f in features], dtype=torch.long)
+#     all_input_mask = torch.tensor([f.input_mask for f in features], dtype=torch.long)
+#     all_segment_ids = torch.tensor([f.segment_ids for f in features], dtype=torch.long)
+#     all_output_ids = torch.tensor([f.output_ids for f in features], dtype=torch.long)
+#     all_next_sentence_label = torch.tensor([f.is_next for f in features], dtype=torch.long)
+#     if args.yago_reference:
+#
+#         # assert(len(ref_features[0].reference_ids)==len(ref_features[0].reference_weights))
+#         # assert (len(ref_features[0].reference_ids[0]) == len(ref_features[0].reference_weights[0]))
+#         all_reference_ids = torch.tensor([r.reference_ids for r in ref_features], dtype=torch.long)
+#         # print(all_reference_ids.size())
+#         all_reference_weights = torch.tensor([r.reference_weights for r in ref_features], dtype=torch.float)
+#         # print(all_reference_weights.size())
+#         dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_output_ids, all_next_sentence_label,
+#                                 all_reference_ids, all_reference_weights)
+#     else:
+#         dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_output_ids, all_next_sentence_label)
+#
+#     return dataset
 
 
 def main():

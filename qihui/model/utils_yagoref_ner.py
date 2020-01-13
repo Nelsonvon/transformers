@@ -101,7 +101,8 @@ def convert_examples_to_features(examples,
                                  mask_padding_with_zero=True,
                                  yago_reference=False,
                                  max_ref=None,
-                                 print_samples=False):
+                                 print_samples=False,
+                                 do_lower_case=True):
     """ Loads a data file into a list of `InputBatch`s
         `cls_token_at_end` define the location of the CLS token:
             - False (Default, BERT/XLM pattern): [CLS] + A + [SEP] + B + [SEP]
@@ -115,7 +116,7 @@ def convert_examples_to_features(examples,
     features = []
     ref_features = []
     if yago_reference:
-        with open('/work/smt3/wwang/TAC2019/qihui_data/yago/YagoReference.pickle', 'rb') as ref_pickle: #TODO:
+        with open('/work/smt3/wwang/TAC2019/qihui_data/yago/YagoReference{}.pickle'.format("" if do_lower_case else "_cased"), 'rb') as ref_pickle: #TODO:
             ref_dict = pickle.load(ref_pickle)
     for (ex_index, example) in enumerate(examples):
         if ex_index % 10000 == 0:
@@ -124,7 +125,7 @@ def convert_examples_to_features(examples,
         tokens = []
         label_ids = []
         for word, label in zip(example.words, example.labels):
-            word_tokens = tokenizer.tokenize(word)
+            word_tokens = tokenizer.tokenize(word.lower() if do_lower_case else word)
             tokens.extend(word_tokens)
             # Use the real label id for the first token of the word, and padding ids for the remaining tokens
             label_ids.extend([label_map[label]] + [pad_token_label_id] * (len(word_tokens) - 1))
