@@ -81,7 +81,7 @@ def examples_generator(tokenizer: BertTokenizer, corpus_pickle: str, save_exampl
         labels = [pad_token] + labels_1 + [sep_token] + words_2 + [sep_token]
 
 def read_examples_from_pickle(data_dir, file_list=None):
-    test_mod = True
+    test_mod = False
     test_files = 0
     examples = []
     if file_list is None:
@@ -120,7 +120,7 @@ def convert_examples_to_features(examples,
 
     exp_iterator = tqdm(examples, desc='Instances', total=len(examples))
     count_example = 0
-    test_mod = True
+    test_mod = False
     for example in exp_iterator:
         count_example += 1
         if test_mod and count_example == 1000:

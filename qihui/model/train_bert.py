@@ -64,21 +64,42 @@ def set_seed(args):
     if args.n_gpu > 0:
         torch.cuda.manual_seed_all(args.seed)
 
+def assign_pickles(args, task_id):
+    file_list = os.listdir(args.data_dir)
+    wiki_list = []
+    book_list = []
+    for filename in file_list:
+        if filename.startswith('wiki'):
+            wiki_list.append(filename)
+        elif filename.startswith('book'):
+            book_list.append(filename)
+    wiki_list.sort()
+    book_list.sort()
+    logger.info("Assigned pickle files {}".format(', '.join([wiki_list[(task_id*2)%len(wiki_list)],
+                                                 wiki_list[(task_id*2+1)%len(wiki_list)],
+                                                 book_list[task_id%len(book_list)]])))
+    return ([wiki_list[(task_id*2)%len(wiki_list)],
+                                                 wiki_list[(task_id*2+1)%len(wiki_list)],
+                                                 book_list[task_id%len(book_list)]])
 
-def train(args, train_dataset, model, tokenizer, pad_token_label_id):
+
+def train(args, model, tokenizer, pad_token_label_id):
     """ Train the model """
     if args.local_rank in [-1, 0]:
         tb_writer = SummaryWriter()
 
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
-    train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
-    train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size)
+    # train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
+    # train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size)
 
-    if args.max_steps > 0:
-        t_total = args.max_steps
-        args.num_train_epochs = args.max_steps // (len(train_dataloader) // args.gradient_accumulation_steps) + 1
-    else:
-        t_total = len(train_dataloader) // args.gradient_accumulation_steps * args.num_train_epochs
+    # if args.max_steps > 0:
+    #     t_total = args.max_steps
+    #     args.num_train_epochs = args.max_steps // (len(train_dataloader) // args.gradient_accumulation_steps) + 1
+    # else:
+    #     t_total = len(train_dataloader) // args.gradient_accumulation_steps * args.num_train_epochs
+    assert(args.max_steps is not None and args.max_steps > 0)
+    assert(args.num_train_epochs is not None and args.num_train_epochs > 0)
+    t_total = args.max_steps
 
     # Prepare optimizer and schedule (linear warmup and decay)
     no_decay = ["bias", "LayerNorm.weight"]
@@ -108,7 +129,7 @@ def train(args, train_dataset, model, tokenizer, pad_token_label_id):
 
     # Train!
     logger.info("***** Running training *****")
-    logger.info("  Num examples = %d", len(train_dataset))
+    # logger.info("  Num examples = %d", len(train_dataset))
     logger.info("  Num Epochs = %d", args.num_train_epochs)
     logger.info("  Instantaneous batch size per GPU = %d", args.per_gpu_train_batch_size)
     logger.info("  Total train batch size (w. parallel, distributed & accumulation) = %d",
@@ -123,76 +144,90 @@ def train(args, train_dataset, model, tokenizer, pad_token_label_id):
     train_iterator = trange(int(args.num_train_epochs), desc="Epoch", disable=args.local_rank not in [-1, 0])
     set_seed(args)  # Added here for reproductibility (even between python 2 and 3)
     for epochs in train_iterator:
-        epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])
-        for step, batch in enumerate(epoch_iterator):
-            model.train()
-            batch = tuple(t.to(args.device) for t in batch)
-            if args.yago_reference:
+        """
+        TODO:
+        1. assign pickle file
+        2. load / cache data -> train_dataset
+        3. output log info.
+        """
+        for subtask_id in range(68):
+            pickle_list = assign_pickles(args, subtask_id)
+            train_dataset = load_and_cache_examples(args, tokenizer, pickle_list)
+            train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
+            train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size)
+            epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])
+            for step, batch in enumerate(epoch_iterator):
+                model.train()
+                batch = tuple(t.to(args.device) for t in batch)
+                # if args.yago_reference:
+                #     inputs = {"input_ids": batch[0],
+                #             "attention_mask": batch[1],
+                #             "masked_lm_labels": batch[3],
+                #             "next_sentence_label": batch[4],
+                #             "reference_ids":batch[5],
+                #             "reference_weights":batch[6]}
+                # else:
                 inputs = {"input_ids": batch[0],
-                          "attention_mask": batch[1],
-                          "masked_lm_labels": batch[3],
-                          "next_sentence_label": batch[4],
-                          "reference_ids":batch[5],
-                          "reference_weights":batch[6]}
-            else:
-                inputs = {"input_ids": batch[0],
-                          "attention_mask": batch[1],
-                          "masked_lm_labels": batch[3],
-                          "next_sentence_label": batch[4]}
-            # if args.model_type != "distilbert":
-            #     inputs["token_type_ids"] = batch[2] if args.model_type in ["bert", "xlnet"] else None  # XLM and RoBERTa don"t use segment_ids
+                        "attention_mask": batch[1],
+                        "masked_lm_labels": batch[3],
+                        "next_sentence_label": batch[4]}
+                # if args.model_type != "distilbert":
+                #     inputs["token_type_ids"] = batch[2] if args.model_type in ["bert", "xlnet"] else None  # XLM and RoBERTa don"t use segment_ids
 
-            outputs = model(**inputs)
-            loss = outputs[0]  # model outputs are always tuple in pytorch-transformers (see doc)
+                outputs = model(**inputs)
+                loss = outputs[0]  # model outputs are always tuple in pytorch-transformers (see doc)
 
-            if args.n_gpu > 1:
-                loss = loss.mean()  # mean() to average on multi-gpu parallel training
-            if args.gradient_accumulation_steps > 1:
-                loss = loss / args.gradient_accumulation_steps
+                if args.n_gpu > 1:
+                    loss = loss.mean()  # mean() to average on multi-gpu parallel training
+                if args.gradient_accumulation_steps > 1:
+                    loss = loss / args.gradient_accumulation_steps
 
-            if args.fp16:
-                with amp.scale_loss(loss, optimizer) as scaled_loss:
-                    scaled_loss.backward()
-            else:
-                loss.backward()
-
-            tr_loss += loss.item()
-            if (step + 1) % args.gradient_accumulation_steps == 0:
                 if args.fp16:
-                    torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_grad_norm)
+                    with amp.scale_loss(loss, optimizer) as scaled_loss:
+                        scaled_loss.backward()
                 else:
-                    torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+                    loss.backward()
 
-                optimizer.step()
-                scheduler.step()  # Update learning rate schedule
-                model.zero_grad()
-                global_step += 1
+                tr_loss += loss.item()
+                if (step + 1) % args.gradient_accumulation_steps == 0:
+                    if args.fp16:
+                        torch.nn.utils.clip_grad_norm_(amp.master_params(optimizer), args.max_grad_norm)
+                    else:
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
 
-                if args.local_rank in [-1, 0] and args.logging_steps > 0 and global_step % args.logging_steps == 0:
-                    tb_writer.add_scalar("lr", scheduler.get_lr()[0], global_step)
-                    tb_writer.add_scalar("loss", (tr_loss - logging_loss) / args.logging_steps, global_step)
-                    logging_loss = tr_loss
+                    optimizer.step()
+                    scheduler.step()  # Update learning rate schedule
+                    model.zero_grad()
+                    global_step += 1
 
-                if global_step == 10:
-                    logger.info("test output, save model after first 1000 steps")
-                    output_dir = os.path.join(args.output_dir, "test_save")
-                    if not os.path.exists(output_dir):
-                        os.makedirs(output_dir)
-                    model_to_save = model.module if hasattr(model, "module") else model  # Take care of distributed/parallel training
-                    model_to_save.save_pretrained(output_dir)
-                    torch.save(args, os.path.join(output_dir, "training_args.bin"))
-                    logger.info("Test saving finished")
-                    
-                # if args.local_rank in [-1, 0] and args.save_steps > 0 and global_step % args.save_steps == 0:
-                #     # Save model checkpoint
-                #     output_dir = os.path.join(args.output_dir, "checkpoint-{}".format(global_step))
-                #     if not os.path.exists(output_dir):
-                #         os.makedirs(output_dir)
-                #     model_to_save = model.module if hasattr(model, "module") else model  # Take care of distributed/parallel training
-                #     model_to_save.save_pretrained(output_dir)
-                #     torch.save(args, os.path.join(output_dir, "training_args.bin"))
-                #     logger.info("Saving model checkpoint to %s", output_dir)
+                    if args.local_rank in [-1, 0] and args.logging_steps > 0 and global_step % args.logging_steps == 0:
+                        tb_writer.add_scalar("lr", scheduler.get_lr()[0], global_step)
+                        tb_writer.add_scalar("loss", (tr_loss - logging_loss) / args.logging_steps, global_step)
+                        logging_loss = tr_loss
 
+                    if global_step == 10:
+                        logger.info("test output, save model after first 1000 steps")
+                        output_dir = os.path.join(args.output_dir, "test_save")
+                        if not os.path.exists(output_dir):
+                            os.makedirs(output_dir)
+                        model_to_save = model.module if hasattr(model, "module") else model  # Take care of distributed/parallel training
+                        model_to_save.save_pretrained(output_dir)
+                        torch.save(args, os.path.join(output_dir, "training_args.bin"))
+                        logger.info("Test saving finished")
+                        
+                    if args.local_rank in [-1, 0] and args.save_steps > 0 and global_step % args.save_steps == 0:
+                        # Save model checkpoint
+                        output_dir = os.path.join(args.output_dir, "checkpoint-step{}".format(global_step))
+                        if not os.path.exists(output_dir):
+                            os.makedirs(output_dir)
+                        model_to_save = model.module if hasattr(model, "module") else model  # Take care of distributed/parallel training
+                        model_to_save.save_pretrained(output_dir)
+                        torch.save(args, os.path.join(output_dir, "training_args.bin"))
+                        logger.info("Saving model checkpoint to %s", output_dir)
+
+            if args.max_steps > 0 and global_step > args.max_steps:
+                epoch_iterator.close()
+                break
         output_dir = os.path.join(args.output_dir, "checkpoint-epoch{}".format(str(epochs)))
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
@@ -201,9 +236,7 @@ def train(args, train_dataset, model, tokenizer, pad_token_label_id):
         torch.save(args, os.path.join(output_dir, "training_args.bin"))
         logger.info("Saving model checkpoint to %s", output_dir)
 
-        if args.max_steps > 0 and global_step > args.max_steps:
-            epoch_iterator.close()
-            break
+        
         if args.max_steps > 0 and global_step > args.max_steps:
             train_iterator.close()
             break
@@ -287,36 +320,39 @@ def evaluate(args, model, tokenizer, labels, pad_token_label_id, mode, prefix=""
     return results, preds_list
 
 
-def load_and_cache_examples(args, tokenizer, mode):
+def load_and_cache_examples(args, tokenizer, pickle_list):
     if args.local_rank not in [-1, 0] and not evaluate:
         torch.distributed.barrier()  # Make sure only the first process in distributed training process the dataset, and the others will use the cache
 
-
+    
     # Load data features from cache or dataset file
-    cached_features_file = os.path.join(args.data_dir, "cached_{}_{}_{}".format(mode,
-        list(filter(None, args.model_name_or_path.split("/"))).pop(),
-        str(args.max_seq_length)))
-    cached_yago_file = os.path.join(args.data_dir, "cached_{}_{}_{}_yago".format(mode,
-                                                                            list(filter(None, args.model_name_or_path.split("/"))).pop(),
-                                                                            str(args.max_seq_length)))
-    if (os.path.exists(cached_features_file) and not args.overwrite_cache and not args.yago_reference) or \
-        (os.path.exists(cached_features_file) and not args.overwrite_cache and args.yago_reference and os.path.exists(cached_yago_file)):
-        logger.info("Loading features from cached file %s", cached_features_file)
-        features = torch.load(cached_features_file)
-        if args.yago_reference:
-            logger.info("Loading additional yago features from cached file %s", cached_yago_file)
-            ref_features = torch.load(cached_yago_file)
-    else:
-        logger.info("Creating features from dataset file at %s", args.data_dir)
-        examples = read_examples_from_pickle(args.data_dir)
-        features, ref_features = convert_examples_to_features(examples, tokenizer, args.max_seq_length, yago_ref=args.yago_reference)
-        del examples # otherwise may cause out of memory
+    features = []
+    for filename in pickle_list:
+        cached_features_file = os.path.join(args.data_dir, "cached_{}_{}_{}".format(filename.replace('.pickle',''),
+            "uncased" if args.do_lower_case else "cased",
+            str(args.max_seq_length)))
+        # cached_yago_file = os.path.join(args.data_dir, "cached_{}_{}_{}_yago".format(mode,
+        #                                                                         list(filter(None, args.model_name_or_path.split("/"))).pop(),
+        #                                                                         str(args.max_seq_length)))
+        if (os.path.exists(cached_features_file) and not args.overwrite_cache):
+            logger.info("Loading features from cached file %s", cached_features_file)
+            features += torch.load(cached_features_file)
+            # if args.yago_reference:
+            #     logger.info("Loading additional yago features from cached file %s", cached_yago_file)
+            #     ref_features = torch.load(cached_yago_file)
+        else:
+            logger.info("Creating features from dataset file %s", args.data_dir)
+            examples = read_examples_from_pickle(args.data_dir, [filename])
+            pickle_features, _ = convert_examples_to_features(examples, tokenizer, args.max_seq_length, yago_ref=False)
+            del examples # otherwise may cause out of memory
+            features += pickle_features
+            # del pickle_features
 
-        if args.local_rank in [-1, 0]:
-            logger.info("Saving features into cached file %s", cached_features_file)
-            torch.save(features, cached_features_file)
-            if args.yago_reference:
-                torch.save(ref_features, cached_yago_file)
+            if args.local_rank in [-1, 0]:
+                logger.info("Saving features into cached file %s", cached_features_file)
+                torch.save(pickle_features, cached_features_file)
+                # if args.yago_reference:
+                #     torch.save(ref_features, cached_yago_file)
 
     if args.local_rank == 0 and not evaluate:
         torch.distributed.barrier()  # Make sure only the first process in distributed training process the dataset, and the others will use the cache
@@ -326,19 +362,19 @@ def load_and_cache_examples(args, tokenizer, mode):
     all_input_mask = torch.tensor([f.input_mask for f in features], dtype=torch.long)
     all_segment_ids = torch.tensor([f.segment_ids for f in features], dtype=torch.long)
     all_output_ids = torch.tensor([f.output_ids for f in features], dtype=torch.long)
-    all_next_sentence_label = torch.tensor([f.is_next for f in features], dtype=torch.long)
-    if args.yago_reference:
+    all_next_sentence_label = torch.tensor([f.is_random_next for f in features], dtype=torch.long)
+    # if args.yago_reference:
 
-        # assert(len(ref_features[0].reference_ids)==len(ref_features[0].reference_weights))
-        # assert (len(ref_features[0].reference_ids[0]) == len(ref_features[0].reference_weights[0]))
-        all_reference_ids = torch.tensor([r.reference_ids for r in ref_features], dtype=torch.long)
-        # print(all_reference_ids.size())
-        all_reference_weights = torch.tensor([r.reference_weights for r in ref_features], dtype=torch.float)
-        # print(all_reference_weights.size())
-        dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_output_ids, all_next_sentence_label,
-                                all_reference_ids, all_reference_weights)
-    else:
-        dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_output_ids, all_next_sentence_label)
+    #     # assert(len(ref_features[0].reference_ids)==len(ref_features[0].reference_weights))
+    #     # assert (len(ref_features[0].reference_ids[0]) == len(ref_features[0].reference_weights[0]))
+    #     all_reference_ids = torch.tensor([r.reference_ids for r in ref_features], dtype=torch.long)
+    #     # print(all_reference_ids.size())
+    #     all_reference_weights = torch.tensor([r.reference_weights for r in ref_features], dtype=torch.float)
+    #     # print(all_reference_weights.size())
+    #     dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_output_ids, all_next_sentence_label,
+    #                             all_reference_ids, all_reference_weights)
+    # else:
+    dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_output_ids, all_next_sentence_label)
 
     return dataset
 
@@ -432,8 +468,8 @@ def main():
 
     parser.add_argument("--logging_steps", type=int, default=1000,
                         help="Log every X updates steps.")
-    # parser.add_argument("--save_steps", type=int, default=50,
-    #                     help="Save checkpoint every X updates steps.")
+    parser.add_argument("--save_steps", type=int, default=50,
+                        help="Save checkpoint every X updates steps.")
     # parser.add_argument("--eval_all_checkpoints", action="store_true",
     #                     help="Evaluate all checkpoints starting with the same prefix as model_name ending and ending with step number")
     parser.add_argument("--no_cuda", action="store_true",
@@ -457,6 +493,12 @@ def main():
     parser.add_argument("--yago_reference", action="store_true",
                         help="Use Reference of Yago types as additional inputs.")
     args = parser.parse_args()
+
+    
+    if 'uncased' in args.model_name_or_path:
+        args.do_lower_case = True
+    else:
+        args.do_lower_case = False
 
     if os.path.exists(args.output_dir) and os.listdir(
             args.output_dir) and not args.overwrite_output_dir:
@@ -504,7 +546,7 @@ def main():
     config_class, model_class, tokenizer_class = (BertConfig, BertForPreTraining, BertTokenizer)
     # config = BertConfig() #
     bertconfig = BertConfig.from_pretrained('bert-base-uncased',
-                                    do_lower_case=True,
+                                    do_lower_case=args.do_lower_case,
                                     cache_dir='/work/smt2/qfeng/Project/huggingface/pretrain/base_uncased')
     # tokenizer = tokenizer_class.from_pretrained(args.tokenizer_name if args.tokenizer_name else args.model_name_or_path,
     #                                             do_lower_case=args.do_lower_case,
@@ -520,7 +562,8 @@ def main():
         config = bertconfig
         model = BertForPreTraining(config)
     else:
-        config = YagoRefBertConfig(bertconfig.__dict__,reference_size=REFERENCE_SIZE)
+        config = YagoRefBertConfig.from_pretrained('bert-base-uncased' if args.do_lower_case else 'bert-base-cased', reference_size=REFERENCE_SIZE,
+                                                    cache_dir='/work/smt2/qfeng/Project/huggingface/pretrain/base_{}'.format('uncased' if args.do_lower_case else 'cased'))
         model = YagoRefBertForPreTraining(config)
 
     if args.local_rank == 0:
@@ -531,8 +574,8 @@ def main():
     logger.info("Training/evaluation parameters %s", args)
 
     # Training
-    train_dataset = load_and_cache_examples(args, tokenizer, pad_token_label_id, mode="train") # TODO: need total rewritten
-    global_step, tr_loss = train(args, train_dataset, model, tokenizer, pad_token_label_id)
+    # train_dataset = load_and_cache_examples(args, tokenizer, pad_token_label_id, mode="train") # TODO: need total rewritten
+    global_step, tr_loss = train(args, model, tokenizer, pad_token_label_id)
     logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
 
     # Saving best-practices: if you use defaults names for the model, you can reload it using from_pretrained()

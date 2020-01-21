@@ -1,5 +1,6 @@
 
 import random
+import pickle
 basic_folder = '/work/smt2/qfeng/Project/huggingface/datasets/'
 
 def split_train_dev():
@@ -51,4 +52,40 @@ def repair_wiki():
     repair_wiki_pickle()
     return
 
-repair_wiki()
+# repair_wiki()
+
+def pseudo_yago_reference():
+    with open('/work/smt3/wwang/TAC2019/qihui_data/yago/YagoReference_cased.pickle', 'rb') as fin:
+        reference_dict = pickle.load(fin)
+    with open('/work/smt3/wwang/TAC2019/qihui_data/yago/type_idx_dicts_cased.pickle', 'rb') as fin:
+        type_idx_dict = pickle.load(fin)
+    with open('/work/smt3/wwang/TAC2019/qihui_data/yago/idx_type_dicts_cased.pickle', 'rb') as fin:
+        idx_type_dict = pickle.load(fin)
+
+    eps=1e-6
+    for id in reference_dict:
+        rand_type_idx = random.sample(list(idx_type_dict.keys()),k=10)
+        rand_list = []
+        pseudo_weights = {}
+        for _ in range(9):
+            rand_list.append(random.random())
+        rand_list.sort(reverse=True)
+        rand_list = [1.0] + rand_list + [0.0]
+        pointer = 0
+        for i in range(10):
+            if rand_list[i]-rand_list[i+1] > eps:
+                pseudo_weights[rand_type_idx[i]] = rand_list[i]-rand_list[i+1]
+            else:
+                rand_list[i+1] = rand_list[i]
+        reference_dict[id] = pseudo_weights
+    
+    example_ids = random.sample(list(reference_dict.keys()), k=10)
+    for id in example_ids:
+        print(reference_dict[id])
+        assert(abs(sum(reference_dict[id].values())-1)<eps)
+    with open('/work/smt3/wwang/TAC2019/qihui_data/yago/PseudoYagoReference_cased.pickle', 'wb') as fout:
+        pickle.dump(reference_dict, fout, protocol=pickle.HIGHEST_PROTOCOL)
+
+pseudo_yago_reference()
+
+    

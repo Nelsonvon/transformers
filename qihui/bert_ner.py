@@ -696,21 +696,22 @@ def main():
     # Temporary code: check whether the values of reference_embedding are significant
     if args.do_significant_check and args.yago_reference:
         model = YagoRefBertForTokenClassification.from_pretrained(args.output_dir, config=config)
-        bertconfig = config_class.from_pretrained(args.config_name if args.config_name else args.model_name_or_path,
+        bertconfig = config_class.from_pretrained("/work/smt2/qfeng/Project/huggingface/models/base-cased_1-9/",
                                               num_labels=num_labels,
                                               cache_dir=args.cache_dir if args.cache_dir else None)
-        model_pretrain = BertForTokenClassification.from_pretrained(args.model_name_or_path,
+        model_noyago = BertForTokenClassification.from_pretrained("/work/smt2/qfeng/Project/huggingface/models/base-cased_1-9/",
                                                 from_tf=bool(".ckpt" in args.model_name_or_path),
                                                 config=bertconfig,
                                                 cache_dir=args.cache_dir if args.cache_dir else None)
         model.to(args.device)
         model.eval()
-        model_pretrain.to(args.device)
-        model_pretrain.eval()
+        model_noyago.to(args.device)
+        model_noyago.eval()
         # logger.info(model.bert.embeddings.word_embeddings.weight.size())
         with open('/work/smt3/wwang/TAC2019/qihui_data/yago/YagoReference{}.pickle'.format("" if args.do_lower_case else "_cased"), 'rb') as ref_pickle: #TODO:
             ref_dict = pickle.load(ref_pickle)
         cos_sim = []
+        cos_sim_ww = []
         ref_vec_norm = []
         cos = torch.nn.CosineSimilarity(dim=0, eps=1e-6)
         for id in range(config.vocab_size):
@@ -723,16 +724,19 @@ def main():
                 reference_embedding = torch.sum(reference_embeddings,dim=-2)
                 vec_norm = torch.norm(reference_embedding)
                 ref_vec_norm.append(vec_norm)
-                pretrain_word_embedding = model_pretrain.bert.embeddings.word_embeddings(torch.tensor(id, dtype=torch.long, device=args.device))
+                noyago_word_embedding = model_noyago.bert.embeddings.word_embeddings(torch.tensor(id, dtype=torch.long, device=args.device))
                 # logger.info(vec_norm/torch.norm(word_embedding))
-                cos_sim.append(cos(word_embedding+reference_embedding, pretrain_word_embedding))
+                cos_sim.append(cos(word_embedding,reference_embedding))
+                cos_sim_ww.append(cos(word_embedding,noyago_word_embedding))
                 # logger.info(cos(word_embedding, reference_embedding))
                 assert (word_embedding.size() == reference_embedding.size())
         # word_embedding_norm = torch.norm(model.bert.embeddings.word_embeddings.weight, p=2, dim=1)
         # reference_embedding_norm = torch.norm(model.bert.embeddings.reference_embeddings.weight, p=2, dim=1)
         avg_sim = sum(cos_sim)/len(cos_sim)
+        avg_sim_ww = sum(cos_sim_ww)/len(cos_sim_ww)
         avg_ratio = sum(ref_vec_norm)/len(ref_vec_norm)
         logger.info(avg_sim)
+        logger.info(avg_sim_ww)
         logger.info(avg_ratio)
     return results
 

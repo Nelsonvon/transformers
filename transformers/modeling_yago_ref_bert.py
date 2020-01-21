@@ -4,6 +4,7 @@ import logging
 import math
 import os
 import sys
+import pickle
 
 import torch
 from torch import nn
@@ -25,6 +26,9 @@ class YagoRefBertEmbeddings(nn.Module):
         self.word_embeddings = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=0)
         # new
         self.reference_embeddings = nn.Embedding(config.reference_size, config.hidden_size, padding_idx=0)# ?? padding_idx
+        with open('/work/smt3/wwang/TAC2019/qihui_data/yago/YagoReference_unlimit.pickle', 'rb') as fin: # TODO: need to be customized.
+            self.ref_dict = pickle.load(fin)
+
         self.position_embeddings = nn.Embedding(config.max_position_embeddings, config.hidden_size)
         self.token_type_embeddings = nn.Embedding(config.type_vocab_size, config.hidden_size)
 
@@ -56,12 +60,25 @@ class YagoRefBertEmbeddings(nn.Module):
         position_embeddings = self.position_embeddings(position_ids)
         token_type_embeddings = self.token_type_embeddings(token_type_ids)
 
-        epsilon = 1e-6
-        # print('embedding dim')
-        # print(self.reference_embeddings(reference_ids).size())
-        # print('weight_dim')
-        # print(torch.unsqueeze(reference_weights, dim=-1).size())
-        reference_embeddings = torch.sum(self.reference_embeddings(reference_ids)*torch.unsqueeze(reference_weights, dim=-1), dim=-2) # hope it works...
+        # epsilon = 1e-6
+        if reference_ids is not None:
+            reference_embeddings = torch.sum(self.reference_embeddings(reference_ids)*torch.unsqueeze(reference_weights, dim=-1), dim=-2) # hope it works...
+        else:
+            # ref_id_list = torch.tensor(list(ref_dict[id].keys()), dtype=torch.long, device=args.device)
+            # ref_id_weight = torch.tensor(list(ref_dict[id].values()), dtype=torch.float, device=args.device)
+            # reference_embeddings = model.bert.embeddings.reference_embeddings(ref_id_list)*torch.unsqueeze(ref_id_weight, dim=-1)
+            reference_embeddings = torch.zeros(inputs_embeds.size(), dtype=torch.float, device=device)
+            for sent_id in range(list(input_ids.size())[0]):
+                for token_id in range(list(input_ids.size())[1]):
+                    input_id = int(input_ids[sent_id, token_id])
+                    if input_id in self.ref_dict:
+                        ref_id_list = torch.tensor(list(self.ref_dict[input_id].keys()), dtype=torch.long, device=device)
+                        ref_id_weight = torch.tensor(list(self.ref_dict[input_id].values()), dtype=torch.float, device=device)
+                        reference_embeddings[sent_id, token_id,:] = torch.sum(self.reference_embeddings(ref_id_list)*torch.unsqueeze(ref_id_weight, dim=-1), dim=-2)
+                    else:
+                        reference_embeddings[sent_id, token_id,:] = self.reference_embeddings(torch.tensor([0], dtype=torch.long, device=device))
+
+
         # print(reference_embeddings.size())
         embeddings = inputs_embeds + position_embeddings + token_type_embeddings + reference_embeddings
         embeddings = self.LayerNorm(embeddings)
@@ -92,8 +109,8 @@ class YagoRefBertModel(BertModel):
         self.tie_weights()
 
     def forward(self, input_ids=None, attention_mask=None, token_type_ids=None, position_ids=None,
-                head_mask=None, inputs_embeds=None, encoder_hidden_states=None, encoder_attention_mask=None,
-                reference_ids=None, reference_weights=None):
+                head_mask=None, inputs_embeds=None, encoder_hidden_states=None, encoder_attention_mask=None):# ,
+                # reference_ids=None, reference_weights=None):
         """ Forward pass on the Model.
 
         The model can behave as an encoder (with only self-attention) as well
@@ -111,7 +128,7 @@ class YagoRefBertModel(BertModel):
         """
         if input_ids is not None and inputs_embeds is not None:
             raise ValueError("You cannot specify both input_ids and inputs_embeds at the same time")
-        elif input_ids is not None and reference_ids is not None:
+        elif input_ids is not None: # and reference_ids is not None:
             input_shape = input_ids.size()
         elif inputs_embeds is not None:
             input_shape = inputs_embeds.size()[:-1]
@@ -185,8 +202,8 @@ class YagoRefBertModel(BertModel):
         else:
             head_mask = [None] * self.config.num_hidden_layers
 
-        embedding_output = self.embeddings(input_ids=input_ids, position_ids=position_ids, token_type_ids=token_type_ids, inputs_embeds=inputs_embeds,
-                                           reference_ids=reference_ids, reference_weights=reference_weights)
+        embedding_output = self.embeddings(input_ids=input_ids, position_ids=position_ids, token_type_ids=token_type_ids, inputs_embeds=inputs_embeds)#,
+                                        #    reference_ids=reference_ids, reference_weights=reference_weights)
         encoder_outputs = self.encoder(embedding_output,
                                        attention_mask=extended_attention_mask,
                                        head_mask=head_mask,
@@ -208,17 +225,17 @@ class YagoRefBertForPreTraining(BertForPreTraining):
         self.init_weights()
 
     def forward(self, input_ids=None, attention_mask=None, token_type_ids=None, position_ids=None,
-                head_mask=None, inputs_embeds=None, masked_lm_labels=None, next_sentence_label=None,
-                reference_ids=None, reference_weights=None):
+                head_mask=None, inputs_embeds=None, masked_lm_labels=None, next_sentence_label=None): #,
+                # reference_ids=None, reference_weights=None):
 
         outputs = self.bert(input_ids,
                             attention_mask=attention_mask,
                             token_type_ids=token_type_ids,
                             position_ids=position_ids,
                             head_mask=head_mask,
-                            inputs_embeds=inputs_embeds,
-                            reference_ids=reference_ids,
-                            reference_weights=reference_weights)
+                            inputs_embeds=inputs_embeds)#,
+                            # reference_ids=reference_ids,
+                            # reference_weights=reference_weights)
 
         sequence_output, pooled_output = outputs[:2]
         prediction_scores, seq_relationship_score = self.cls(sequence_output, pooled_output)
@@ -247,17 +264,17 @@ class YagoRefBertForTokenClassification(BertForTokenClassification):
         self.init_weights()
 
     def forward(self, input_ids=None, attention_mask=None, token_type_ids=None,
-                position_ids=None, head_mask=None, inputs_embeds=None, labels=None,
-                reference_ids=None, reference_weights=None):
+                position_ids=None, head_mask=None, inputs_embeds=None, labels=None): #,
+                # reference_ids=None, reference_weights=None):
 
         outputs = self.bert(input_ids,
                             attention_mask=attention_mask,
                             token_type_ids=token_type_ids,
                             position_ids=position_ids,
                             head_mask=head_mask,
-                            inputs_embeds=inputs_embeds,
-                            reference_ids=reference_ids,
-                            reference_weights=reference_weights)
+                            inputs_embeds=inputs_embeds)#,
+                            # reference_ids=reference_ids,
+                            # reference_weights=reference_weights)
 
         sequence_output = outputs[0]
 
