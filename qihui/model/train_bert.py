@@ -83,14 +83,16 @@ def assign_pickles(args, task_id):
                                                  book_list[task_id%len(book_list)]])
 
 
-def train(args, model, tokenizer, pad_token_label_id):
+def train(args, model, tokenizer, pad_token_label_id, train_dataset):
     """ Train the model """
     if args.local_rank in [-1, 0]:
         tb_writer = SummaryWriter()
 
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
-    # train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
-    # train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size)
+
+    # if train_dataset is not None:
+    #     train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
+    #     train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size)
 
     # if args.max_steps > 0:
     #     t_total = args.max_steps

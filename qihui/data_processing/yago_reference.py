@@ -79,11 +79,13 @@ if True: #__name__= '__main__'
 
     # XTODO: save statistics
 
+    # YagoReference_unlimit: pure empirical distribution
+    # YagoReference_prune:
 
-    with open('/work/smt3/wwang/TAC2019/qihui_data/yago/YagoReference{}_unlimit.pickle'.format('' if do_lower_case else '_cased'), 'wb') as fout:
+    with open('/work/smt3/wwang/TAC2019/qihui_data/yago/YagoReference{}_prune.pickle'.format('' if do_lower_case else '_cased'), 'wb') as fout:
         pickle.dump(reference_dict, fout, protocol=pickle.HIGHEST_PROTOCOL)
-    with open('/work/smt3/wwang/TAC2019/qihui_data/yago/type_idx_dicts{}_unlimit.pickle'.format('' if do_lower_case else '_cased'), 'wb') as fout:
+    with open('/work/smt3/wwang/TAC2019/qihui_data/yago/type_idx_dicts{}_prune.pickle'.format('' if do_lower_case else '_cased'), 'wb') as fout:
         pickle.dump(type_idx_dict, fout, protocol=pickle.HIGHEST_PROTOCOL)
-    with open('/work/smt3/wwang/TAC2019/qihui_data/yago/idx_type_dicts{}_unlimit.pickle'.format('' if do_lower_case else '_cased'), 'wb') as fout:
+    with open('/work/smt3/wwang/TAC2019/qihui_data/yago/idx_type_dicts{}_prune.pickle'.format('' if do_lower_case else '_cased'), 'wb') as fout:
         pickle.dump(idx_type_dict, fout, protocol=pickle.HIGHEST_PROTOCOL)
 

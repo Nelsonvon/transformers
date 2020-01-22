@@ -39,6 +39,9 @@ class YagoRefBertEmbeddings(nn.Module):
 
     """
     **reference_ids**: ``torch.LongTensor`` of shape ``(batch_size, sequence_length, max_types_num)``:
+    
+    **input_ids**: ``torch.LongTensor`` of shape ``(batch_size, sequence_length)``
+    
     """
     def forward(self, input_ids=None, token_type_ids=None, position_ids=None, inputs_embeds=None, reference_ids = None, reference_weights = None):
 
