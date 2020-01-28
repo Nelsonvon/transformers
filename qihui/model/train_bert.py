@@ -83,8 +83,9 @@ def assign_pickles(args, task_id):
                                                  book_list[task_id%len(book_list)]])
 
 
-def train(args, model, tokenizer, pad_token_label_id, train_dataset):
+def train(args, model, tokenizer, pad_token_label_id, train_dataset=None):
     """ Train the model """
+    # TODO: parameter `train_dataset` is abandoned
     if args.local_rank in [-1, 0]:
         tb_writer = SummaryWriter()
 
@@ -93,14 +94,22 @@ def train(args, model, tokenizer, pad_token_label_id, train_dataset):
     # if train_dataset is not None:
     #     train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
     #     train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size)
-
+    # else:
+    #     pickle_list = assign_pickles(args, subtask_id)
+    #     train_dataset = load_and_cache_examples(args, tokenizer, pickle_list)
+    #     train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
+    #     train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size)
+            
     # if args.max_steps > 0:
     #     t_total = args.max_steps
     #     args.num_train_epochs = args.max_steps // (len(train_dataloader) // args.gradient_accumulation_steps) + 1
     # else:
     #     t_total = len(train_dataloader) // args.gradient_accumulation_steps * args.num_train_epochs
+
     assert(args.max_steps is not None and args.max_steps > 0)
     assert(args.num_train_epochs is not None and args.num_train_epochs > 0)
+    # logger.info(model.named_parameters())
+
     t_total = args.max_steps
 
     # Prepare optimizer and schedule (linear warmup and decay)
@@ -140,7 +149,9 @@ def train(args, model, tokenizer, pad_token_label_id, train_dataset):
     logger.info("  Gradient Accumulation steps = %d", args.gradient_accumulation_steps)
     logger.info("  Total optimization steps = %d", t_total)
 
-    global_step = 0
+    global_step = 0 if args.skip_global_steps==-1 else args.skip_global_steps
+    args.skip_steps = global_step*args.gradient_accumulation_steps if args.skip_steps==-1 else args.skip_steps
+    
     tr_loss, logging_loss = 0.0, 0.0
     model.zero_grad()
     train_iterator = trange(int(args.num_train_epochs), desc="Epoch", disable=args.local_rank not in [-1, 0])
@@ -152,13 +163,22 @@ def train(args, model, tokenizer, pad_token_label_id, train_dataset):
         2. load / cache data -> train_dataset
         3. output log info.
         """
-        for subtask_id in range(68):
+        subtask_iterator = trange(68, desc="Subtask", disable=args.local_rank not in [-1, 0])
+        for subtask_id in subtask_iterator:
             pickle_list = assign_pickles(args, subtask_id)
             train_dataset = load_and_cache_examples(args, tokenizer, pickle_list)
             train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
             train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size)
+            skip_subtask = True
             epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])
             for step, batch in enumerate(epoch_iterator):
+                if subtask_id < args.start_task_id:
+                    break
+                if step < args.skip_steps:
+                    # if (step + 1) % args.gradient_accumulation_steps == 0:
+                    #     global_step += 1
+                    continue
+                skip_subtask = False
                 model.train()
                 batch = tuple(t.to(args.device) for t in batch)
                 # if args.yago_reference:
@@ -169,6 +189,12 @@ def train(args, model, tokenizer, pad_token_label_id, train_dataset):
                 #             "reference_ids":batch[5],
                 #             "reference_weights":batch[6]}
                 # else:
+
+                # assert (batch[0].size()[0]<=args.per_gpu_train_batch_size) and (batch[0].size()[1]==args.max_seq_length)
+                # logger.info(batch[0].size())
+                # logger.info(batch[1].size())
+                # logger.info(batch[3].size())
+                # logger.info(batch[4].size())
                 inputs = {"input_ids": batch[0],
                         "attention_mask": batch[1],
                         "masked_lm_labels": batch[3],
@@ -228,8 +254,20 @@ def train(args, model, tokenizer, pad_token_label_id, train_dataset):
                         logger.info("Saving model checkpoint to %s", output_dir)
 
             if args.max_steps > 0 and global_step > args.max_steps:
+                subtask_iterator.close()
                 epoch_iterator.close()
                 break
+
+            args.skip_steps -= len(epoch_iterator)
+            if not skip_subtask:
+                output_dir = os.path.join(args.output_dir, "checkpoint-subtask{}-epoch{}".format(str(subtask_id), str(epochs)))
+                if not os.path.exists(output_dir):
+                    os.makedirs(output_dir)
+                model_to_save = model.module if hasattr(model,
+                                                        "module") else model  # Take care of distributed/parallel training
+                model_to_save.save_pretrained(output_dir)
+                torch.save(args, os.path.join(output_dir, "training_args.bin"))
+                logger.info("Saving model checkpoint to %s", output_dir)
         output_dir = os.path.join(args.output_dir, "checkpoint-epoch{}".format(str(epochs)))
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
@@ -365,6 +403,7 @@ def load_and_cache_examples(args, tokenizer, pickle_list):
     all_segment_ids = torch.tensor([f.segment_ids for f in features], dtype=torch.long)
     all_output_ids = torch.tensor([f.output_ids for f in features], dtype=torch.long)
     all_next_sentence_label = torch.tensor([f.is_random_next for f in features], dtype=torch.long)
+
     # if args.yago_reference:
 
     #     # assert(len(ref_features[0].reference_ids)==len(ref_features[0].reference_weights))
@@ -494,6 +533,10 @@ def main():
     parser.add_argument("--server_port", type=str, default="", help="For distant debugging.")
     parser.add_argument("--yago_reference", action="store_true",
                         help="Use Reference of Yago types as additional inputs.")
+    parser.add_argument("--start_task_id", type=int, default=0)
+    parser.add_argument("--skip_steps", type=int, default=-1)
+    parser.add_argument("--skip_global_steps", type=int, default=-1)
+    parser.add_argument("--load_checkpoint", type=str, default="")
     args = parser.parse_args()
 
     
@@ -560,13 +603,24 @@ def main():
     #                                     from_tf=bool(".ckpt" in args.model_name_or_path),
     #                                     config=config,
     #                                     cache_dir=args.cache_dir if args.cache_dir else None)
-    if not args.yago_reference:
-        config = bertconfig
-        model = BertForPreTraining(config)
+    if args.load_checkpoint == "":
+        if not args.yago_reference:
+            config = bertconfig
+            model = BertForPreTraining(config)
+        else:
+            config = YagoRefBertConfig.from_pretrained('bert-base-uncased' if args.do_lower_case else 'bert-base-cased', reference_size=REFERENCE_SIZE,
+                                                        cache_dir='/work/smt2/qfeng/Project/huggingface/pretrain/base_{}'.format('uncased' if args.do_lower_case else 'cased'))
+            model = YagoRefBertForPreTraining(config)
     else:
-        config = YagoRefBertConfig.from_pretrained('bert-base-uncased' if args.do_lower_case else 'bert-base-cased', reference_size=REFERENCE_SIZE,
-                                                    cache_dir='/work/smt2/qfeng/Project/huggingface/pretrain/base_{}'.format('uncased' if args.do_lower_case else 'cased'))
-        model = YagoRefBertForPreTraining(config)
+        if 'step' in args.load_checkpoint.split('/')[-1] and args.skip_global_steps is not None:
+            assert(args.load_checkpoint.endswith(str(args.skip_global_steps)))
+        if not args.yago_reference:
+            config = BertConfig.from_pretrained(args.load_checkpoint)
+            model = BertForPreTraining.from_pretrained(args.load_checkpoint)
+        else:
+            config = YagoRefBertConfig.from_pretrained(args.load_checkpoint)
+            model = YagoRefBertForPreTraining.from_pretrained(args.load_checkpoint)
+
 
     if args.local_rank == 0:
         torch.distributed.barrier()  # Make sure only the first process in distributed training will download model & vocab
@@ -577,7 +631,10 @@ def main():
 
     # Training
     # train_dataset = load_and_cache_examples(args, tokenizer, pad_token_label_id, mode="train") # TODO: need total rewritten
-    global_step, tr_loss = train(args, model, tokenizer, pad_token_label_id)
+    # pickle_list = assign_pickles(args, args.start_task_id)
+    # train_dataset = load_and_cache_examples(args, tokenizer, pickle_list)
+
+    global_step, tr_loss = train(args, model=model, tokenizer=tokenizer, pad_token_label_id=pad_token_label_id)
     logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
 
     # Saving best-practices: if you use defaults names for the model, you can reload it using from_pretrained()

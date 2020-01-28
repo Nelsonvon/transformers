@@ -708,7 +708,7 @@ def main():
         model_noyago.to(args.device)
         model_noyago.eval()
         # logger.info(model.bert.embeddings.word_embeddings.weight.size())
-        with open('/work/smt3/wwang/TAC2019/qihui_data/yago/YagoReference{}.pickle'.format("" if args.do_lower_case else "_cased"), 'rb') as ref_pickle: #TODO:
+        with open('/work/smt3/wwang/TAC2019/qihui_data/yago/YagoReference_prune{}.pickle'.format("" if args.do_lower_case else "_cased"), 'rb') as ref_pickle: #TODO:
             ref_dict = pickle.load(ref_pickle)
         cos_sim = []
         cos_sim_ww = []

@@ -19,16 +19,18 @@ logger = logging.getLogger(__name__)
 
 class YagoRefBertEmbeddings(nn.Module):
     """
-    concatenate one hot word embeddings with 
+    concatenate one hot word embeddings with
     """
     def __init__(self, config:YagoRefBertConfig):
         super(YagoRefBertEmbeddings, self).__init__()
         self.word_embeddings = nn.Embedding(config.vocab_size, config.hidden_size, padding_idx=0)
         # new
         self.reference_embeddings = nn.Embedding(config.reference_size, config.hidden_size, padding_idx=0)# ?? padding_idx
-        with open('/work/smt3/wwang/TAC2019/qihui_data/yago/YagoReference_unlimit.pickle', 'rb') as fin: # TODO: need to be customized.
-            self.ref_dict = pickle.load(fin)
-
+        with open('/work/smt3/wwang/TAC2019/qihui_data/yago/YagoReference_prune.pickle', 'rb') as fin: # TODO: need to be customized.
+            logger.info("load reference dictionary")
+            ref_dict = pickle.load(fin)
+        self.build_ref_dict_tensor(ref_dict, config)
+        # self.ref_id = torch.tensor([])
         self.position_embeddings = nn.Embedding(config.max_position_embeddings, config.hidden_size)
         self.token_type_embeddings = nn.Embedding(config.type_vocab_size, config.hidden_size)
 
@@ -70,23 +72,66 @@ class YagoRefBertEmbeddings(nn.Module):
             # ref_id_list = torch.tensor(list(ref_dict[id].keys()), dtype=torch.long, device=args.device)
             # ref_id_weight = torch.tensor(list(ref_dict[id].values()), dtype=torch.float, device=args.device)
             # reference_embeddings = model.bert.embeddings.reference_embeddings(ref_id_list)*torch.unsqueeze(ref_id_weight, dim=-1)
-            reference_embeddings = torch.zeros(inputs_embeds.size(), dtype=torch.float, device=device)
-            for sent_id in range(list(input_ids.size())[0]):
-                for token_id in range(list(input_ids.size())[1]):
-                    input_id = int(input_ids[sent_id, token_id])
-                    if input_id in self.ref_dict:
-                        ref_id_list = torch.tensor(list(self.ref_dict[input_id].keys()), dtype=torch.long, device=device)
-                        ref_id_weight = torch.tensor(list(self.ref_dict[input_id].values()), dtype=torch.float, device=device)
-                        reference_embeddings[sent_id, token_id,:] = torch.sum(self.reference_embeddings(ref_id_list)*torch.unsqueeze(ref_id_weight, dim=-1), dim=-2)
-                    else:
-                        reference_embeddings[sent_id, token_id,:] = self.reference_embeddings(torch.tensor([0], dtype=torch.long, device=device))
 
+            """
+            Old version of reference_embeddings, slows down the computation dramatically
+            """
+            # reference_embeddings = torch.zeros(inputs_embeds.size(), dtype=torch.float, device=device)
+            # # logger.info(input_ids.size(0))
+            # # logger.info(input_ids.size()[0])
+            # # logger.info(input_ids.size(1))
+            # # logger.info(input_ids.size()[1])
+            # for sent_id in range(input_ids.size(0)):
+            #     for token_id in range(input_ids.size(1)):
+            #         input_id = int(input_ids[sent_id, token_id])
+            #         if input_id in self.ref_dict:
+            #             ref_id_list = torch.tensor(list(self.ref_dict[input_id].keys()), dtype=torch.long, device=device)
+            #             ref_id_weight = torch.tensor(list(self.ref_dict[input_id].values()), dtype=torch.float, device=device)
+            #             reference_embeddings[sent_id, token_id,:] = torch.sum(self.reference_embeddings(ref_id_list)*torch.unsqueeze(ref_id_weight, dim=-1), dim=-2)
+            #         else:
+            #             reference_embeddings[sent_id, token_id,:] = self.reference_embeddings(torch.tensor([0], dtype=torch.long, device=device))
+
+            """
+            New version:
+            """
+            # reference_ids = [(list(ref_dict[input_id].keys()) if (input_id in ref_dict) else [pad_token_id]) for input_id in input_ids]
+            # reference_weights = [(list(ref_dict[input_id].values()) if (input_id in ref_dict) else [0.0]) for input_id in input_ids]
+            # reference_embeddings = torch.tensor(, dtype=torch.float, device=device)
+            # self.ref_ids.to(device)
+            # ref_ids = self.ref_ids.clone()
+            # ref_ids.to(device)
+            # ref_weights = self.ref_weights.clone()
+            # ref_weights.to(device)
+            # self.ref_weights.to(device)
+            reference_ids = self.ref_ids[input_ids].to(device)
+            reference_weights = self.ref_weights[input_ids].to(device)
+            # logger.info(reference_ids.size())
+            # logger.info(reference_weights.size())
+            reference_embeddings = torch.sum(
+                self.reference_embeddings(reference_ids) * torch.unsqueeze(reference_weights, dim=-1), dim=-2)
 
         # print(reference_embeddings.size())
         embeddings = inputs_embeds + position_embeddings + token_type_embeddings + reference_embeddings
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
         return embeddings
+
+    def build_ref_dict_tensor(self, ref_dict, config):
+        pad_token_id = 0
+        ref_ids = [list(ref_dict[token_id].keys()) if token_id in ref_dict else [pad_token_id] for token_id in range(config.vocab_size)]
+        ref_weights = [list(ref_dict[token_id].values()) if token_id in ref_dict else [0.0] for token_id in range(config.vocab_size)]
+
+        max_ref = max([len(ref_id) for ref_id in ref_ids])
+        logger.info("maximal number of types: {}".format(str(max_ref)))
+
+        for i in range(len(ref_ids)):
+            assert (len(ref_ids[i]) == len(ref_weights[i]))
+            ref_ids[i] += [pad_token_id] * (max_ref - len(ref_ids[i]))
+            ref_weights[i] += [0.0] * (max_ref - len(ref_weights[i]))
+            assert (len(ref_ids[i]) == len(ref_weights[i]))
+        self.ref_ids = torch.tensor(ref_ids, dtype=torch.long)
+        self.ref_weights = torch.tensor(ref_weights, dtype=torch.float)
+        pass
 
 class YagoRefBertModel(BertModel):
     def __init__(self, config):
@@ -112,8 +157,8 @@ class YagoRefBertModel(BertModel):
         self.tie_weights()
 
     def forward(self, input_ids=None, attention_mask=None, token_type_ids=None, position_ids=None,
-                head_mask=None, inputs_embeds=None, encoder_hidden_states=None, encoder_attention_mask=None):# ,
-                # reference_ids=None, reference_weights=None):
+                head_mask=None, inputs_embeds=None, encoder_hidden_states=None, encoder_attention_mask=None,
+                reference_ids=None, reference_weights=None):
         """ Forward pass on the Model.
 
         The model can behave as an encoder (with only self-attention) as well
@@ -228,17 +273,17 @@ class YagoRefBertForPreTraining(BertForPreTraining):
         self.init_weights()
 
     def forward(self, input_ids=None, attention_mask=None, token_type_ids=None, position_ids=None,
-                head_mask=None, inputs_embeds=None, masked_lm_labels=None, next_sentence_label=None): #,
-                # reference_ids=None, reference_weights=None):
+                head_mask=None, inputs_embeds=None, masked_lm_labels=None, next_sentence_label=None,
+                reference_ids=None, reference_weights=None):
 
         outputs = self.bert(input_ids,
                             attention_mask=attention_mask,
                             token_type_ids=token_type_ids,
                             position_ids=position_ids,
                             head_mask=head_mask,
-                            inputs_embeds=inputs_embeds)#,
-                            # reference_ids=reference_ids,
-                            # reference_weights=reference_weights)
+                            inputs_embeds=inputs_embeds,
+                            reference_ids=reference_ids,
+                            reference_weights=reference_weights)
 
         sequence_output, pooled_output = outputs[:2]
         prediction_scores, seq_relationship_score = self.cls(sequence_output, pooled_output)
@@ -267,17 +312,17 @@ class YagoRefBertForTokenClassification(BertForTokenClassification):
         self.init_weights()
 
     def forward(self, input_ids=None, attention_mask=None, token_type_ids=None,
-                position_ids=None, head_mask=None, inputs_embeds=None, labels=None): #,
-                # reference_ids=None, reference_weights=None):
+                position_ids=None, head_mask=None, inputs_embeds=None, labels=None,
+                reference_ids=None, reference_weights=None):
 
         outputs = self.bert(input_ids,
                             attention_mask=attention_mask,
                             token_type_ids=token_type_ids,
                             position_ids=position_ids,
                             head_mask=head_mask,
-                            inputs_embeds=inputs_embeds)#,
-                            # reference_ids=reference_ids,
-                            # reference_weights=reference_weights)
+                            inputs_embeds=inputs_embeds,
+                            reference_ids=reference_ids,
+                            reference_weights=reference_weights)
 
         sequence_output = outputs[0]
 

@@ -115,7 +115,7 @@ def convert_examples_to_features(examples,
     features = []
     ref_features = []
     if yago_ref:
-        with open('/work/smt3/wwang/TAC2019/qihui_data/yago/YagoReference.pickle', 'rb') as ref_pickle: #TODO:
+        with open('/work/smt3/wwang/TAC2019/qihui_data/yago/YagoReference_unlimit.pickle', 'rb') as ref_pickle: #TODO:
             ref_dict: Dict = pickle.load(ref_pickle)
 
     exp_iterator = tqdm(examples, desc='Instances', total=len(examples))
