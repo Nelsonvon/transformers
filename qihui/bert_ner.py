@@ -134,9 +134,9 @@ def train(args, train_dataset, model, tokenizer, labels, pad_token_label_id):
                       "labels": batch[3]}
             if args.model_type != "distilbert":
                 inputs["token_type_ids"] = batch[2] if args.model_type in ["bert", "xlnet"] else None  # XLM and RoBERTa don"t use segment_ids
-            if args.yago_reference:
-                inputs['reference_ids'] = batch[4]
-                inputs['reference_weights'] = batch[5]
+            # if args.yago_reference:
+            #     inputs['reference_ids'] = batch[4]
+            #     inputs['reference_weights'] = batch[5]
             outputs = model(**inputs)
             # logger.info(outputs[1].size())
             loss = outputs[0]  # model outputs are always tuple in pytorch-transformers (see doc)
@@ -235,9 +235,9 @@ def evaluate(args, model, tokenizer, labels, pad_token_label_id, mode, prefix=""
                       "labels": batch[3]}
             if args.model_type != "distilbert":
                 inputs["token_type_ids"] = batch[2] if args.model_type in ["bert", "xlnet"] else None  # XLM and RoBERTa don"t use segment_ids
-            if args.yago_reference:
-                inputs['reference_ids'] = batch[4]
-                inputs['reference_weights'] = batch[5]
+            # if args.yago_reference:
+            #     inputs['reference_ids'] = batch[4]
+            #     inputs['reference_weights'] = batch[5]
             outputs = model(**inputs)
             tmp_eval_loss, logits = outputs[:2]
 
@@ -294,13 +294,12 @@ def load_and_cache_examples(args, tokenizer, labels, pad_token_label_id, mode):
                                                                                              args.model_name_or_path.split(
                                                                                                  "/"))).pop(),
                                                                                  str(args.max_seq_length)))
-    if (os.path.exists(cached_features_file) and not args.overwrite_cache and not args.yago_reference) or \
-        (os.path.exists(cached_features_file) and not args.overwrite_cache and args.yago_reference and os.path.exists(cached_yago_file)):
+    if (os.path.exists(cached_features_file) and not args.overwrite_cache):
         logger.info("Loading features from cached file %s", cached_features_file)
         features = torch.load(cached_features_file)
-        if args.yago_reference:
-            logger.info("Loading additional yago features from cached file %s", cached_yago_file)
-            ref_features = torch.load(cached_yago_file)
+        # if args.yago_reference:
+        #     logger.info("Loading additional yago features from cached file %s", cached_yago_file)
+        #     ref_features = torch.load(cached_yago_file)
     else:
         logger.info("Creating features from dataset file at %s", args.data_dir)
         examples = read_examples_from_file(args.data_dir, mode)
@@ -321,11 +320,11 @@ def load_and_cache_examples(args, tokenizer, labels, pad_token_label_id, mode):
                                                 max_ref=args.max_reference_num if args.yago_reference else None,
                                                 do_lower_case=args.do_lower_case
                                                 )
-        if args.local_rank in [-1, 0]:
+        if args.local_rank in [-1, 0] and args.overwrite_cache:
             logger.info("Saving features into cached file %s", cached_features_file)
             torch.save(features, cached_features_file)
-            if args.yago_reference:
-                torch.save(ref_features, cached_yago_file)
+            # if args.yago_reference:
+            #     torch.save(ref_features, cached_yago_file)
 
     if args.local_rank == 0 and not evaluate:
         torch.distributed.barrier()  # Make sure only the first process in distributed training process the dataset, and the others will use the cache
@@ -336,18 +335,18 @@ def load_and_cache_examples(args, tokenizer, labels, pad_token_label_id, mode):
     all_segment_ids = torch.tensor([f.segment_ids for f in features], dtype=torch.long)
     all_label_ids = torch.tensor([f.label_ids for f in features], dtype=torch.long)
 
-    if args.yago_reference:
-
-        # assert(len(ref_features[0].reference_ids)==len(ref_features[0].reference_weights))
-        # assert (len(ref_features[0].reference_ids[0]) == len(ref_features[0].reference_weights[0]))
-        all_reference_ids = torch.tensor([r.reference_ids for r in ref_features], dtype=torch.long)
-        # print(all_reference_ids.size())
-        all_reference_weights = torch.tensor([r.reference_weights for r in ref_features], dtype=torch.float)
-        # print(all_reference_weights.size())
-        dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids,
-                                all_reference_ids, all_reference_weights)
-    else:
-        dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids)
+    # if args.yago_reference:
+    #
+    #     # assert(len(ref_features[0].reference_ids)==len(ref_features[0].reference_weights))
+    #     # assert (len(ref_features[0].reference_ids[0]) == len(ref_features[0].reference_weights[0]))
+    #     all_reference_ids = torch.tensor([r.reference_ids for r in ref_features], dtype=torch.long)
+    #     # print(all_reference_ids.size())
+    #     all_reference_weights = torch.tensor([r.reference_weights for r in ref_features], dtype=torch.float)
+    #     # print(all_reference_weights.size())
+    #     dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids,
+    #                             all_reference_ids, all_reference_weights)
+    # else:
+    dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids)
     return dataset
 
 
@@ -466,13 +465,13 @@ def main():
             args.labels = os.path.join(args.data_dir, 'labels.txt')
         else:
             raise ValueError("Invalid or missing labels file!")
-    if '-uncased' in args.model_name_or_path:
+    if '-uncased' in args.model_name_or_path or '_uncased' in args.model_name_or_path:
         args.do_lower_case = True
-    elif '-cased' in args.model_name_or_path:
+    elif '-cased' in args.model_name_or_path or '_cased' in args.model_name_or_path:
         args.do_lower_case = False
 
     # name the output diretory according to the used model, time tag, usage of yago reference
-    output_dir = args.model_name_or_path[len('bert-'):]
+    output_dir = args.model_name_or_path.split('/')[-1]
     if args.yago_reference:
         output_dir += "_yagoref"
     if args.additional_output_tag != "":
@@ -484,9 +483,11 @@ def main():
     args.output_dir = DEFAULT_OUTPUT_REPO + output_dir
     logger.info("output model to file {}".format(output_dir))
 
+    if args.tokenizer_name == "":
+        args.tokenizer_name = 'bert-base-uncased' if args.do_lower_case else 'bert-base-cased'
 
     if args.yago_reference:
-        REFERENCE_SIZE = 1000
+        REFERENCE_SIZE = 959
 
     # if args.yago_reference:
     #     with open('/work/smt3/wwang/TAC2019/qihui_data/yago/YagoReference.pickle', 'rb') as ref_pickle: #TODO:

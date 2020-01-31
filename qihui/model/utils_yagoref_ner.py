@@ -115,9 +115,9 @@ def convert_examples_to_features(examples,
         max_ref=10
     features = []
     ref_features = []
-    logger.info("SET PSEUDO REFERENCE WITH RANDOM TYPES AND WEIGHTS, REMEMBER TO CORRECT IT LATER!")
+    # logger.info("SET PSEUDO REFERENCE WITH RANDOM TYPES AND WEIGHTS, REMEMBER TO CORRECT IT LATER!")
     if yago_reference:
-        with open('/work/smt3/wwang/TAC2019/qihui_data/yago/YagoReference{}.pickle'.format("" if do_lower_case else "_cased"), 'rb') as ref_pickle: #TODO:
+        with open('/work/smt3/wwang/TAC2019/qihui_data/yago/YagoReference{}_prune.pickle'.format("" if do_lower_case else "_cased"), 'rb') as ref_pickle: #TODO:
             ref_dict = pickle.load(ref_pickle)
     for (ex_index, example) in enumerate(examples):
         if ex_index % 10000 == 0:
