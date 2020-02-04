@@ -177,6 +177,7 @@ def train(args, model, tokenizer, pad_token_label_id, train_dataset=None):
                 if step < args.skip_steps:
                     # if (step + 1) % args.gradient_accumulation_steps == 0:
                     #     global_step += 1
+                    scheduler.step() # TODO: don't know if it's okay to update scheduler without updating optimizer
                     continue
                 skip_subtask = False
                 model.train()

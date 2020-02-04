@@ -411,6 +411,7 @@ class BertPooler(nn.Module):
         return pooled_output
 
 
+# apply a linear projection on top of Bert output and gelu activation function
 class BertPredictionHeadTransform(nn.Module):
     def __init__(self, config):
         super(BertPredictionHeadTransform, self).__init__()
@@ -418,7 +419,7 @@ class BertPredictionHeadTransform(nn.Module):
         if isinstance(config.hidden_act, str) or (sys.version_info[0] == 2 and isinstance(config.hidden_act, unicode)):
             self.transform_act_fn = ACT2FN[config.hidden_act]
         else:
-            self.transform_act_fn = config.hidden_act
+            self.transform_act_fn = config.hidden_act # Activation used in Bert is `gelu`
         self.LayerNorm = BertLayerNorm(config.hidden_size, eps=config.layer_norm_eps)
 
     def forward(self, hidden_states):
@@ -427,7 +428,7 @@ class BertPredictionHeadTransform(nn.Module):
         hidden_states = self.LayerNorm(hidden_states)
         return hidden_states
 
-
+# output: vector of vocabulary size
 class BertLMPredictionHead(nn.Module):
     def __init__(self, config):
         super(BertLMPredictionHead, self).__init__()

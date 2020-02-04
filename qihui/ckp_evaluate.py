@@ -11,8 +11,8 @@ DEFAULT_SETTING = "\
 --model_type bert \
 --max_seq_length 128 \
 --cache_dir base-uncased/ \
---gradient_accumulation_steps 4 \
---learning_rate 1e-4 \
+--gradient_accumulation_steps 1 \
+--learning_rate 2e-5 \
 --num_train_epochs 15 \
 --per_gpu_train_batch_size 32 \
 --per_gpu_eval_batch_size 8 \
@@ -22,17 +22,18 @@ DEFAULT_SETTING = "\
 --test_during_training \
 --do_train --do_eval --do_predict \
 --seed 1 \
---yago_reference \
 --weight_decay 0.01 \
 --warmup_proportion 0.1 \
 --do_significant_check \
+--overwrite_output_dir \
 --overwrite_cache \
 --do_lower_case "
 
 """
+--yago_reference \
 --model_name_or_path bert-base-cased \
 --additional_output_tag high_lr \
---overwrite_output_dir \
+--overwrite_cache \
 """
 
 
@@ -53,11 +54,16 @@ if __name__ == "__main__":
     ckp_list = os.listdir(exp_folder)
     if args.eval_ckp == "":
         for ckp in ckp_list:
+            if 'subtask' in ckp or 'test' in ckp:
+                continue
+            # num_steps = int(ckp[len('checkpoint-step'):])
+            # if num_steps <= 290000:
+            #     continue
             args.model_name = os.path.join(exp_folder, ckp)
             output_tag = ckp
-            settings = "--model_name_or_path {}".format(args.model_name)
+            settings = "--model_name_or_path {} --additional_output_tag baseline".format(args.model_name)
             cmd = HEADER.replace('bertner', 'bertner_{}'.format(output_tag)) + DEFAULT_SETTING + settings
             command.append(cmd)
         with open(os.path.join('/work/smt2/qfeng/Project/huggingface/scripts', '{}_{}.sh'.format(date, hashtag)), 'w') as fout:
             fout.write('\n'.join(command))
-            print(os.path.join('/work/smt2/qfeng/Project/huggingface/scripts', '{}_{}.sh'))
+            print(os.path.join('/work/smt2/qfeng/Project/huggingface/scripts', '{}_{}.sh'.format(date, hashtag)))
