@@ -27,11 +27,12 @@ DEFAULT_SETTING = "\
 --do_significant_check \
 --overwrite_output_dir \
 --overwrite_cache \
+--yago_reference \
 --do_lower_case "
 
 """
---yago_reference \
---model_name_or_path bert-base-cased \
+
+--model_name_or_path bert-base-uncased \
 --additional_output_tag high_lr \
 --overwrite_cache \
 """
@@ -56,12 +57,12 @@ if __name__ == "__main__":
         for ckp in ckp_list:
             if 'subtask' in ckp or 'test' in ckp:
                 continue
-            # num_steps = int(ckp[len('checkpoint-step'):])
-            # if num_steps <= 290000:
-            #     continue
+            num_steps = int(ckp[len('checkpoint-step'):])
+            if num_steps <= 520000:
+                continue
             args.model_name = os.path.join(exp_folder, ckp)
             output_tag = ckp
-            settings = "--model_name_or_path {} --additional_output_tag baseline".format(args.model_name)
+            settings = "--model_name_or_path {} --additional_output_tag yago".format(args.model_name)
             cmd = HEADER.replace('bertner', 'bertner_{}'.format(output_tag)) + DEFAULT_SETTING + settings
             command.append(cmd)
         with open(os.path.join('/work/smt2/qfeng/Project/huggingface/scripts', '{}_{}.sh'.format(date, hashtag)), 'w') as fout:

@@ -61,8 +61,8 @@ class BertForMultipleLabelTokenClassification(BertPreTrainedModel):
                             bidirectional=True)
         self.num_labels = config.reference_size
         self.num_tags = config.num_tags
-        self.tag_prediction = BertNerTagPreditionHead()
-        self.type_prediction = BertNerMultipleTypePredictionHead()
+        self.tag_prediction = BertNerTagPreditionHead(config)
+        self.type_prediction = BertNerMultipleTypePredictionHead(config)
 
     def forward(self, input_ids=None, attention_mask=None, token_type_ids=None, position_ids=None, head_mask=None, inputs_embeds=None,
                 tag_ids=None, label_type_ids=None):
@@ -73,14 +73,14 @@ class BertForMultipleLabelTokenClassification(BertPreTrainedModel):
                             head_mask=head_mask,
                             inputs_embeds=inputs_embeds)
 
-        sequence_output = self.bilstm(outputs[1])
+        sequence_output = self.bilstm(outputs[0])
         outputs = (sequence_output,) + outputs
         tag_output = self.tag_prediction(sequence_output)
         type_output = self.type_prediction(sequence_output)
         outputs = (tag_output, type_output,) + outputs
-        loss_fct = CrossEntropyLoss(ignore_index=-1) # TODO: which index is to ignore?
+        loss_fct = CrossEntropyLoss()
         tag_loss = loss_fct(tag_output.view(-1, self.num_tags), tag_ids.view(-1))
-        type_loss = loss_fct(type_output.view(-1, 2),label_type_ids.view(-1))
+        type_loss = loss_fct(type_output.view(-1, 1),label_type_ids.view(-1))
 
         total_loss = tag_loss + type_loss # TODO: weight the terms
 

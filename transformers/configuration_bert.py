@@ -203,7 +203,7 @@ class BertMultipleLabelConfig(BertConfig):
                  num_tags=3, # num_tags=3: BIO format, num_tags = 5: BIOES format
                  use_crf=False,
                  **kwargs):
-        super(YagoRefBertConfig, self).__init__(**kwargs)
+        super(BertMultipleLabelConfig, self).__init__(**kwargs)
         if isinstance(vocab_size_or_config_json_file, str) or (sys.version_info[0] == 2
                         and isinstance(vocab_size_or_config_json_file, unicode)):
             with open(vocab_size_or_config_json_file, "r", encoding='utf-8') as reader:
