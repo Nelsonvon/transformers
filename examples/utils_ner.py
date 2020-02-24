@@ -55,6 +55,7 @@ def read_examples_from_file(data_dir, mode):
     file_path = os.path.join(data_dir, "{}.txt".format(mode))
     guid_index = 1
     examples = []
+    max_length=-1
     with open(file_path, encoding="utf-8") as f:
         words = []
         labels = []
@@ -64,6 +65,8 @@ def read_examples_from_file(data_dir, mode):
                     examples.append(InputExample(guid="{}-{}".format(mode, guid_index),
                                                  words=words,
                                                  labels=labels))
+                    if len(words)>max_length:
+                        max_length = len(words)
                     guid_index += 1
                     words = []
                     labels = []
@@ -79,6 +82,7 @@ def read_examples_from_file(data_dir, mode):
             examples.append(InputExample(guid="%s-%d".format(mode, guid_index),
                                          words=words,
                                          labels=labels))
+    logger.info("Max length of {} file: {}".format(mode, str(max_length)))
     return examples
 
 
@@ -94,7 +98,7 @@ def convert_examples_to_features(examples,
                                  pad_on_left=False,
                                  pad_token=0,
                                  pad_token_segment_id=0,
-                                 pad_token_label_id=-1,
+                                 pad_token_label_id=-100,
                                  sequence_a_segment_id=0,
                                  mask_padding_with_zero=True):
     """ Loads a data file into a list of `InputBatch`s

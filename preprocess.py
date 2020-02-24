@@ -1,6 +1,7 @@
 import sys
 import string
 
+
 from transformers import BertTokenizer
 
 dataset = sys.argv[1]
