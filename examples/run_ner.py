@@ -151,6 +151,8 @@ def train(args, train_dataset, model, tokenizer, labels, pad_token_label_id):
     logger.info("  Gradient Accumulation steps = %d", args.gradient_accumulation_steps)
     logger.info("  Total optimization steps = %d", t_total)
 
+    best_result = 0.0
+
     global_step = 0
     epochs_trained = 0
     steps_trained_in_current_epoch = 0
@@ -176,6 +178,8 @@ def train(args, train_dataset, model, tokenizer, labels, pad_token_label_id):
     )
     set_seed(args)  # Added here for reproductibility
     for epoch in train_iterator:
+        train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
+        train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size)
         epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])
         for step, batch in enumerate(epoch_iterator):
 
@@ -270,6 +274,30 @@ def train(args, train_dataset, model, tokenizer, labels, pad_token_label_id):
                 torch.save(optimizer.state_dict(), os.path.join(output_dir, "optimizer.pt"))
                 torch.save(scheduler.state_dict(), os.path.join(output_dir, "scheduler.pt"))
                 logger.info("Saving optimizer and scheduler states to %s", output_dir)
+
+        # modlog-Feb 27 save the model behave the best on the dev set
+
+        result, _ = evaluate(args, model, tokenizer, labels, pad_token_label_id, mode="dev")
+        if result['f1']>best_result:
+            # Save model checkpoint
+            output_dir = os.path.join(args.output_dir,"best_model")
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+            model_to_save = (
+                model.module if hasattr(model, "module") else model
+            )  # Take care of distributed/parallel training
+            model_to_save.save_pretrained(output_dir)
+            tokenizer.save_pretrained(output_dir)
+
+            torch.save(args, os.path.join(output_dir, "training_args.bin"))
+            logger.info("Saving model checkpoint to %s", output_dir)
+
+            torch.save(optimizer.state_dict(), os.path.join(output_dir, "optimizer.pt"))
+            torch.save(scheduler.state_dict(), os.path.join(output_dir, "scheduler.pt"))
+            logger.info("Saving optimizer and scheduler states to %s", output_dir)
+
+            best_result = result['f1']
+        evaluate(args, model, tokenizer, labels, pad_token_label_id, mode="test")
 
         if args.max_steps > 0 and global_step > args.max_steps:
             train_iterator.close()
@@ -663,6 +691,12 @@ def main():
 
     logger.info("Training/evaluation parameters %s", args)
 
+    if args.overwrite_cache:
+        load_and_cache_examples(args, tokenizer, labels, pad_token_label_id, mode="train")
+        load_and_cache_examples(args, tokenizer, labels, pad_token_label_id, mode="dev")
+        load_and_cache_examples(args, tokenizer, labels, pad_token_label_id, mode="test")
+        args.overwrite_cache=False
+
     # Training
     if args.do_train:
         train_dataset = load_and_cache_examples(args, tokenizer, labels, pad_token_label_id, mode="train")
@@ -691,7 +725,7 @@ def main():
     results = {}
     if args.do_eval and args.local_rank in [-1, 0]:
         tokenizer = tokenizer_class.from_pretrained(args.output_dir, do_lower_case=args.do_lower_case)
-        checkpoints = [args.output_dir]
+        checkpoints = [os.path.join(args.output_dir, "best_model")]
         if args.eval_all_checkpoints:
             checkpoints = list(
                 os.path.dirname(c) for c in sorted(glob.glob(args.output_dir + "/**/" + WEIGHTS_NAME, recursive=True))
@@ -730,7 +764,7 @@ def main():
             if global_step:
                 result = {"{}_{}".format(global_step, k): v for k, v in result.items()}
             results.update(result)
-        model = model_class.from_pretrained(args.output_dir)
+        model = model_class.from_pretrained(args.output_dir, "best_model")
         model.to(args.device)
         result, predictions = evaluate(args, model, tokenizer, labels, pad_token_label_id, mode="test")
         results.update(result)

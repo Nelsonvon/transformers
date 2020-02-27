@@ -119,12 +119,18 @@ def train(args, train_dataset, model, tokenizer, labels, pad_token_label_id):
     logger.info("  Gradient Accumulation steps = %d", args.gradient_accumulation_steps)
     logger.info("  Total optimization steps = %d", t_total)
 
+    best_result = 0.0
+
     global_step = 0
     tr_loss, logging_loss = 0.0, 0.0
     model.zero_grad()
     train_iterator = trange(int(args.num_train_epochs), desc="Epoch", disable=args.local_rank not in [-1, 0])
     set_seed(args)  # Added here for reproductibility (even between python 2 and 3)
     for _ in train_iterator:
+        # modlog-Feb 27 Shuffle the samples before every epoch
+        train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
+        train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size)
+
         epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])
         for step, batch in enumerate(epoch_iterator):
             model.train()
@@ -195,6 +201,18 @@ def train(args, train_dataset, model, tokenizer, labels, pad_token_label_id):
             if args.max_steps > 0 and global_step > args.max_steps:
                 epoch_iterator.close()
                 break
+        # modlog-Feb 27 evaluate after every epoch and update the best model
+        result, _ = evaluate(args, model, tokenizer, labels, pad_token_label_id, mode="dev", prefix=global_step)
+        if result['f1']> best_result:
+            # Save model checkpoint
+            output_dir = os.path.join(args.output_dir, "best_model".format(global_step))
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+            model_to_save = model.module if hasattr(model,
+                                                    "module") else model  # Take care of distributed/parallel training
+            model_to_save.save_pretrained(output_dir)
+            torch.save(args, os.path.join(output_dir, "training_args.bin"))
+            logger.info("Update best model", output_dir)
         if args.max_steps > 0 and global_step > args.max_steps:
             train_iterator.close()
             break
