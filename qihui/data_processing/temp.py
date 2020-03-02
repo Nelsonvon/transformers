@@ -86,6 +86,6 @@ def pseudo_yago_reference():
     with open('/work/smt3/wwang/TAC2019/qihui_data/yago/PseudoYagoReference_cased.pickle', 'wb') as fout:
         pickle.dump(reference_dict, fout, protocol=pickle.HIGHEST_PROTOCOL)
 
-pseudo_yago_reference()
+# pseudo_yago_reference()
 
     

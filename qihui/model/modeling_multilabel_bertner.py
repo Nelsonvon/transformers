@@ -3,12 +3,15 @@ from transformers.configuration_bert import BertMultipleLabelConfig
 import torch
 from torch import nn
 from torch.nn import LSTM, CrossEntropyLoss, Sigmoid
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 class BertNerTagPreditionHead(nn.Module):
     def __init__(self, config:BertMultipleLabelConfig):
         super(BertNerTagPreditionHead, self).__init__()
-        self.tag_decoder = nn.Linear(config.lstm_hidden_size, config.num_tags)
+        self.tag_decoder = nn.Linear(config.lstm_hidden_size*2, config.num_tags)
         # TODO: crf_layer
     
     def forward(self, sequence_output):
@@ -19,16 +22,17 @@ class BertNerTagPreditionHead(nn.Module):
 class BertNerMultipleTypePredictionHead(nn.Module):
     def __init__(self, config: BertMultipleLabelConfig):
         super(BertNerMultipleTypePredictionHead, self).__init__()
-        self.type_decoder = nn.Linear(config.lstm_hidden_size, config.reference_size, bias=False)
+        self.type_decoder = nn.Linear(config.lstm_hidden_size*2, config.reference_size, bias=False)
         self.bias = nn.Parameter(torch.zeros(config.reference_size))
+        self.sig = Sigmoid()
         # TODO: activation function
 
         pass
 
     def forward(self, sequence_output):
-        hidden_states = self.transform(sequence_output) # TODO: rewrite transform function
-        hidden_states = self.type_decoder(hidden_states) + self.bias
-        hidden_states = Sigmoid(hidden_states)
+        # hidden_states = self.transform(sequence_output) # TODO: rewrite transform function
+        hidden_states = self.type_decoder(sequence_output) + self.bias
+        hidden_states = self.sig(hidden_states)
         return hidden_states
 
 
@@ -52,7 +56,8 @@ class BertForMultipleLabelTokenClassification(BertPreTrainedModel):
     def __init__(self, config:BertMultipleLabelConfig):
         super(BertForMultipleLabelTokenClassification, self).__init__(config)
         self.bert = BertModel(config)
-        self.bilstm = LSTM(input_size = config.sequence_length,
+        # self.linear = nn.Linear(in_features= config.hidden_size, out_features=config.lstm_hidden_size)
+        self.bilstm = LSTM(input_size = config.hidden_size,
                             hidden_size = config.lstm_hidden_size,
                             num_layers=1,
                             bias=True,
@@ -72,11 +77,17 @@ class BertForMultipleLabelTokenClassification(BertPreTrainedModel):
                             position_ids=position_ids,
                             head_mask=head_mask,
                             inputs_embeds=inputs_embeds)
-
-        sequence_output = self.bilstm(outputs[0])
+        bert_output = outputs[0]
+        logger.info(bert_output.size())
+        # lstm_input = self.linear(bert_output)
+        # logger.info(lstm_input.size())
+        sequence_output,(h_n, c_n) = self.bilstm(input=bert_output)
         outputs = (sequence_output,) + outputs
-        tag_output = self.tag_prediction(sequence_output)
+        logger.info(sequence_output.size())
+        logger.info(h_n.size())
+        # tag_output = self.tag_prediction(sequence_output)
         type_output = self.type_prediction(sequence_output)
+        tag_output = self.tag_prediction(sequence_output)
         outputs = (tag_output, type_output,) + outputs
         loss_fct = CrossEntropyLoss()
         tag_loss = loss_fct(tag_output.view(-1, self.num_tags), tag_ids.view(-1))
@@ -84,6 +95,6 @@ class BertForMultipleLabelTokenClassification(BertPreTrainedModel):
 
         total_loss = tag_loss + type_loss # TODO: weight the terms
 
-        outputs = (total_loss, tag_loss, type_loss,) + outputs
+        outputs = (total_loss,) + outputs
         return outputs
 

@@ -764,7 +764,7 @@ def main():
             if global_step:
                 result = {"{}_{}".format(global_step, k): v for k, v in result.items()}
             results.update(result)
-        model = model_class.from_pretrained(args.output_dir, "best_model")
+        model = model_class.from_pretrained(os.path.join(args.output_dir, "best_model"))
         model.to(args.device)
         result, predictions = evaluate(args, model, tokenizer, labels, pad_token_label_id, mode="test")
         results.update(result)

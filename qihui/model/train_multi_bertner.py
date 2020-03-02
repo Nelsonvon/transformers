@@ -6,6 +6,9 @@ import logging
 import os
 import random
 import pickle
+import sys
+
+sys.path.append("/u/qfeng/Project/huggingface/transformers/")
 
 import numpy as np
 import torch
@@ -17,6 +20,7 @@ from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, Tenso
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm, trange
 
+# import qihui
 from qihui.model.utils_multi_bertner import convert_pickle_to_features, MultiNerDataset
 from transformers import AdamW, get_linear_schedule_with_warmup
 from transformers import WEIGHTS_NAME, BertConfig, BertForTokenClassification, BertTokenizer, BertForPreTraining
@@ -98,17 +102,30 @@ def train(args, model, tokenizer, masked_token_label_id):
         for subtask_id in subtask_iterator:
             pickle_file = os.path.join(DEFAULT_DATA_REPO, 'se_dict_{}.pickle'.format(str(subtask_id)))
             train_dataset = load_and_cache_examples(args, tokenizer, pickle_file, masked_token_label_id)
-            train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
-            train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size)
+            # TODO:FEB27
+            # train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
+            # train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size)
+
+            batches = [[train_dataset[i][x:x + args.train_batch_size] for i in range(4)] for x in range(0, len(train_dataset[0]), args.train_batch_size)]
+            random.shuffle(batches)
+
             # train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=args.train_batch_size)
-            epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])
+            epoch_iterator = tqdm(batches, desc="Iteration", disable=args.local_rank not in [-1, 0])
             for step, batch in enumerate(epoch_iterator):
                 model.train()
                 # construct the ground truth type output
-                logger.info(batch)
+                logger.info(len(batch))
+                # logger.info(batch[0][0])
+                # logger.info(batch[3][0])
+                assert (torch.sum(one_hot(torch.LongTensor(batch[3][0][2]),num_classes=REFERENCE_SIZE),dim=-2).size()== torch.zeros(REFERENCE_SIZE).size())
+                # test = torch.stack([torch.sum(one_hot(torch.LongTensor(batch[3][0][p]),num_classes=REFERENCE_SIZE),dim=-2) if len(batch[3][0][p])>0 else torch.LongTensor([0]*REFERENCE_SIZE) for p in range(args.max_seq_length)])
+                label_type_ids = torch.stack([
+                    torch.stack([torch.sum(one_hot(torch.LongTensor(batch[3][sent_id][p]),num_classes=REFERENCE_SIZE),dim=-2) if len(batch[3][sent_id][p])>0 else torch.LongTensor([0]*REFERENCE_SIZE) for p in range(args.max_seq_length)]) \
+                    for sent_id in range(len(batch[3]))])
                 logger.info(batch[0].size())
-                logger.info(len(batch[3]))
-                label_type_ids = torch.tensor([[torch.sum(one_hot(torch.LongTensor(batch[3][sent_id][p]),num_classes=REFERENCE_SIZE),dim=-2) if len(batch[3][sent_id][p])>0 else torch.zeros(REFERENCE_SIZE) for p in range(args.max_seq_length)] for sent_id in range(len(batch[3]))], dtype=torch.long)
+                logger.info(batch[1].size())
+                logger.info(batch[2].size())
+                logger.info(label_type_ids.size())
                 inputs = {"input_ids":batch[0].to(args.device),
                 "attention_mask": batch[1].to(args.device),
                 "tag_ids":batch[2].to(args.device),
@@ -117,6 +134,7 @@ def train(args, model, tokenizer, masked_token_label_id):
                 # forward & backward
                 outputs = model(**inputs)
                 loss = outputs[0]
+                # logger.info(loss)
                 if args.n_gpu > 1:
                     loss = loss.mean()  # mean() to average on multi-gpu parallel training
                 if args.gradient_accumulation_steps > 1:
@@ -174,9 +192,14 @@ def load_and_cache_examples(args, tokenizer, pickle_file, masked_token_label_id)
     all_input_mask = torch.tensor([f.input_mask for f in features], dtype=torch.long)
     all_tag_ids = torch.tensor([f.tag_ids for f in features], dtype=torch.long)
     all_type_ids = [f.type_ids for f in features]
+    assert (len(all_input_ids) == len(all_input_mask))
+    assert (len(all_tag_ids) == len(all_type_ids))
+    assert (len(all_input_mask) == len(all_type_ids))
     # logger.info(all_type_ids)
-    dataset = MultiNerDataset(all_input_ids, all_input_mask, all_tag_ids, all_type_ids)
-    logger.info(dataset[0])
+    # dataset = MultiNerDataset(all_input_ids, all_input_mask, all_tag_ids, all_type_ids)
+    # dataset = [[all_input_ids[i], all_input_mask[i], all_tag_ids[i], all_type_ids[i]] for i in range(len(all_input_ids))]
+    dataset = [all_input_ids, all_input_mask, all_tag_ids, all_type_ids]
+    logger.info("len(dataset):{}".format(len(dataset)))
 
     return dataset
 
