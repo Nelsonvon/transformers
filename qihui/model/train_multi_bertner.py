@@ -114,18 +114,18 @@ def train(args, model, tokenizer, masked_token_label_id):
             for step, batch in enumerate(epoch_iterator):
                 model.train()
                 # construct the ground truth type output
-                logger.info(len(batch))
+                # logger.info(len(batch))
                 # logger.info(batch[0][0])
                 # logger.info(batch[3][0])
-                assert (torch.sum(one_hot(torch.LongTensor(batch[3][0][2]),num_classes=REFERENCE_SIZE),dim=-2).size()== torch.zeros(REFERENCE_SIZE).size())
+                # assert (torch.sum(one_hot(torch.LongTensor(batch[3][0][2]),num_classes=REFERENCE_SIZE),dim=-2).size()== torch.zeros(REFERENCE_SIZE).size())
                 # test = torch.stack([torch.sum(one_hot(torch.LongTensor(batch[3][0][p]),num_classes=REFERENCE_SIZE),dim=-2) if len(batch[3][0][p])>0 else torch.LongTensor([0]*REFERENCE_SIZE) for p in range(args.max_seq_length)])
                 label_type_ids = torch.stack([
                     torch.stack([torch.sum(one_hot(torch.LongTensor(batch[3][sent_id][p]),num_classes=REFERENCE_SIZE),dim=-2) if len(batch[3][sent_id][p])>0 else torch.LongTensor([0]*REFERENCE_SIZE) for p in range(args.max_seq_length)]) \
                     for sent_id in range(len(batch[3]))])
-                logger.info(batch[0].size())
-                logger.info(batch[1].size())
-                logger.info(batch[2].size())
-                logger.info(label_type_ids.size())
+                # logger.info(batch[0].size())
+                # logger.info(batch[1].size())
+                # logger.info(batch[2].size())
+                # logger.info(label_type_ids.size())
                 inputs = {"input_ids":batch[0].to(args.device),
                 "attention_mask": batch[1].to(args.device),
                 "tag_ids":batch[2].to(args.device),

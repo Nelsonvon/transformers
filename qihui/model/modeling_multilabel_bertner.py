@@ -22,8 +22,8 @@ class BertNerTagPreditionHead(nn.Module):
 class BertNerMultipleTypePredictionHead(nn.Module):
     def __init__(self, config: BertMultipleLabelConfig):
         super(BertNerMultipleTypePredictionHead, self).__init__()
-        self.type_decoder = nn.Linear(config.lstm_hidden_size*2, config.reference_size, bias=False)
-        self.bias = nn.Parameter(torch.zeros(config.reference_size))
+        self.type_decoder = nn.Linear(config.lstm_hidden_size*2, config.reference_size*2, bias=False)
+        self.bias = nn.Parameter(torch.zeros(config.reference_size*2))
         self.sig = Sigmoid()
         # TODO: activation function
 
@@ -44,9 +44,10 @@ class BertForMultipleLabelTokenClassification(BertPreTrainedModel):
             I: 0
             O: 1
             B: 2
+            (
             E: 3
             S: 4
-
+            )
         **label_type_ids**: ``torch.LongTensor`` of shape (batch_size, sequence_length, reference_size)
         Existance of types of the current token
             ``0`` indicates token w_i is not labeled as type t_j
@@ -78,20 +79,34 @@ class BertForMultipleLabelTokenClassification(BertPreTrainedModel):
                             head_mask=head_mask,
                             inputs_embeds=inputs_embeds)
         bert_output = outputs[0]
-        logger.info(bert_output.size())
+        # logger.info(bert_output.size())
         # lstm_input = self.linear(bert_output)
         # logger.info(lstm_input.size())
         sequence_output,(h_n, c_n) = self.bilstm(input=bert_output)
         outputs = (sequence_output,) + outputs
-        logger.info(sequence_output.size())
-        logger.info(h_n.size())
+        # logger.info(sequence_output.size())
+        # logger.info(h_n.size())
         # tag_output = self.tag_prediction(sequence_output)
         type_output = self.type_prediction(sequence_output)
+        # logger.info(type_output.view(-1, 2).size())
+        # logger.info(type_output.view(-1, 2))
+        # logger.info(label_type_ids.view(-1).size())
+        # logger.info(label_type_ids.view(-1))
+
+
         tag_output = self.tag_prediction(sequence_output)
+
+        # logger.info(tag_output.view(-1, self.num_tags).size())
+        # logger.info(tag_output.view(-1, self.num_tags))
+        # logger.info(tag_ids.view(-1).size())
+        # logger.info(tag_ids.view(-1))
+
         outputs = (tag_output, type_output,) + outputs
         loss_fct = CrossEntropyLoss()
         tag_loss = loss_fct(tag_output.view(-1, self.num_tags), tag_ids.view(-1))
-        type_loss = loss_fct(type_output.view(-1, 1),label_type_ids.view(-1))
+        # logger.info(tag_loss)
+        type_loss = loss_fct(type_output.view(-1,2),label_type_ids.view(-1))
+        # logger.info(type_loss)
 
         total_loss = tag_loss + type_loss # TODO: weight the terms
 
